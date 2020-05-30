@@ -25,7 +25,7 @@ function generate() {
     return;
   }
   $('.toast-header').removeClass('bg-danger').addClass('bg-success');
-  showNotification('Ключ успешно создана');
+  showNotification('Ключ успешно создан');
   let key = eddsa.keyFromSecret(CryptoJS.lib.WordArray.random(16).toString(CryptoJS.enc.Hex));
   let publicKey = key.getPublic('hex');
   let encryptedPrivateKey = CryptoJS.AES.encrypt(key.getSecret('hex'), password1).toString();
