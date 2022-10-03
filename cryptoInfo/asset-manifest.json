@@ -1,15 +1,15 @@
 {
   "files": {
-    "main.js": "/cryptoInfo/static/js/main.0acb2ece.chunk.js",
-    "main.js.map": "/cryptoInfo/static/js/main.0acb2ece.chunk.js.map",
+    "main.js": "/cryptoInfo/static/js/main.2bcd1b99.chunk.js",
+    "main.js.map": "/cryptoInfo/static/js/main.2bcd1b99.chunk.js.map",
     "runtime-main.js": "/cryptoInfo/static/js/runtime-main.779a3f62.js",
     "runtime-main.js.map": "/cryptoInfo/static/js/runtime-main.779a3f62.js.map",
     "static/css/2.a20e0ce2.chunk.css": "/cryptoInfo/static/css/2.a20e0ce2.chunk.css",
-    "static/js/2.2442d32a.chunk.js": "/cryptoInfo/static/js/2.2442d32a.chunk.js",
-    "static/js/2.2442d32a.chunk.js.map": "/cryptoInfo/static/js/2.2442d32a.chunk.js.map",
+    "static/js/2.748dd01a.chunk.js": "/cryptoInfo/static/js/2.748dd01a.chunk.js",
+    "static/js/2.748dd01a.chunk.js.map": "/cryptoInfo/static/js/2.748dd01a.chunk.js.map",
     "index.html": "/cryptoInfo/index.html",
     "static/css/2.a20e0ce2.chunk.css.map": "/cryptoInfo/static/css/2.a20e0ce2.chunk.css.map",
-    "static/js/2.2442d32a.chunk.js.LICENSE.txt": "/cryptoInfo/static/js/2.2442d32a.chunk.js.LICENSE.txt",
+    "static/js/2.748dd01a.chunk.js.LICENSE.txt": "/cryptoInfo/static/js/2.748dd01a.chunk.js.LICENSE.txt",
     "static/media/300.css": "/cryptoInfo/static/media/roboto-vietnamese-300-normal.af9afdc1.woff2",
     "static/media/400.css": "/cryptoInfo/static/media/roboto-vietnamese-400-normal.c0bec65d.woff2",
     "static/media/500.css": "/cryptoInfo/static/media/roboto-vietnamese-500-normal.b8e494da.woff2",
@@ -18,7 +18,7 @@
   "entrypoints": [
     "static/js/runtime-main.779a3f62.js",
     "static/css/2.a20e0ce2.chunk.css",
-    "static/js/2.2442d32a.chunk.js",
-    "static/js/main.0acb2ece.chunk.js"
+    "static/js/2.748dd01a.chunk.js",
+    "static/js/main.2bcd1b99.chunk.js"
   ]
 }
