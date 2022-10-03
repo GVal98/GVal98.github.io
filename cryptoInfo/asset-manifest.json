@@ -1,23 +1,23 @@
 {
   "files": {
-    "main.js": "/static/js/main.6f9b108c.chunk.js",
-    "main.js.map": "/static/js/main.6f9b108c.chunk.js.map",
-    "runtime-main.js": "/static/js/runtime-main.1c723fa4.js",
-    "runtime-main.js.map": "/static/js/runtime-main.1c723fa4.js.map",
-    "static/css/2.907a0915.chunk.css": "/static/css/2.907a0915.chunk.css",
-    "static/js/2.2442d32a.chunk.js": "/static/js/2.2442d32a.chunk.js",
-    "static/js/2.2442d32a.chunk.js.map": "/static/js/2.2442d32a.chunk.js.map",
-    "index.html": "/index.html",
-    "static/css/2.907a0915.chunk.css.map": "/static/css/2.907a0915.chunk.css.map",
-    "static/js/2.2442d32a.chunk.js.LICENSE.txt": "/static/js/2.2442d32a.chunk.js.LICENSE.txt",
-    "static/media/300.css": "/static/media/roboto-vietnamese-300-normal.af9afdc1.woff2",
-    "static/media/400.css": "/static/media/roboto-vietnamese-400-normal.c0bec65d.woff2",
-    "static/media/500.css": "/static/media/roboto-vietnamese-500-normal.b8e494da.woff2",
-    "static/media/700.css": "/static/media/roboto-vietnamese-700-normal.3096f18a.woff2"
+    "main.js": "/cryptoInfo/static/js/main.6f9b108c.chunk.js",
+    "main.js.map": "/cryptoInfo/static/js/main.6f9b108c.chunk.js.map",
+    "runtime-main.js": "/cryptoInfo/static/js/runtime-main.779a3f62.js",
+    "runtime-main.js.map": "/cryptoInfo/static/js/runtime-main.779a3f62.js.map",
+    "static/css/2.a20e0ce2.chunk.css": "/cryptoInfo/static/css/2.a20e0ce2.chunk.css",
+    "static/js/2.2442d32a.chunk.js": "/cryptoInfo/static/js/2.2442d32a.chunk.js",
+    "static/js/2.2442d32a.chunk.js.map": "/cryptoInfo/static/js/2.2442d32a.chunk.js.map",
+    "index.html": "/cryptoInfo/index.html",
+    "static/css/2.a20e0ce2.chunk.css.map": "/cryptoInfo/static/css/2.a20e0ce2.chunk.css.map",
+    "static/js/2.2442d32a.chunk.js.LICENSE.txt": "/cryptoInfo/static/js/2.2442d32a.chunk.js.LICENSE.txt",
+    "static/media/300.css": "/cryptoInfo/static/media/roboto-vietnamese-300-normal.af9afdc1.woff2",
+    "static/media/400.css": "/cryptoInfo/static/media/roboto-vietnamese-400-normal.c0bec65d.woff2",
+    "static/media/500.css": "/cryptoInfo/static/media/roboto-vietnamese-500-normal.b8e494da.woff2",
+    "static/media/700.css": "/cryptoInfo/static/media/roboto-vietnamese-700-normal.3096f18a.woff2"
   },
   "entrypoints": [
-    "static/js/runtime-main.1c723fa4.js",
-    "static/css/2.907a0915.chunk.css",
+    "static/js/runtime-main.779a3f62.js",
+    "static/css/2.a20e0ce2.chunk.css",
     "static/js/2.2442d32a.chunk.js",
     "static/js/main.6f9b108c.chunk.js"
   ]
