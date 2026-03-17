@@ -2,13 +2,22 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/autoLUT/favicon.svg" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/autoLUT/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/autoLUT/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/autoLUT/favicon-16x16.png">
+    <link rel="manifest" href="/autoLUT/site.webmanifest">
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#ffffff" />
     <title>AutoLUT</title>
-    <script type="module" crossorigin src="/autoLUT/assets/index-Dhn70kc9.js"></script>
-    <link rel="stylesheet" crossorigin href="/autoLUT/assets/index-GYihKKxW.css">
+    <script type="module" crossorigin src="/autoLUT/assets/index-CXJI2muc.js"></script>
+    <link rel="stylesheet" crossorigin href="/autoLUT/assets/index-D0OBAhjk.css">
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/autoLUT/sw.js');
+      }
+    </script>
   </body>
 </html>
