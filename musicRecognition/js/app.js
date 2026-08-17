@@ -35,7 +35,7 @@ const el = {
   error: $('errorBox'), monitor: $('monitor'), phase: $('phaseLabel'),
   spectrum: $('spectrum'), scoreFill: $('scoreFill'), scoreMark: $('scoreMark'),
   scoreValue: $('scoreValue'), readout: $('readout'),
-  factors: { level: $('fLevel'), tone: $('fTone'), bass: $('fBass'), flow: $('fFlow') },
+  factors: { level: $('fLevel'), tone: $('fTone'), bass: $('fBass'), flow: $('fFlow'), dyn: $('fDyn') },
   now: $('nowCard'), nowArt: $('nowArt'), nowArtEmpty: $('nowArtEmpty'), nowKicker: $('nowKicker'),
   nowTitle: $('nowTitle'), nowArtist: $('nowArtist'), nowMeta: $('nowMeta'), nowLinks: $('nowLinks'),
   historyList: $('historyList'), historyEmpty: $('historyEmpty'), clearHistory: $('clearHistoryBtn'),
@@ -53,6 +53,7 @@ let features = null;
 let inFlight = false;
 let requests = 0;
 let running = false;
+let wasWarmingUp = true;  // чтобы сообщить о замере фона ровно один раз
 let wakeLock = null;
 let rafId = 0;
 const spectrumBars = new Float32Array(72);
@@ -177,6 +178,7 @@ async function start() {
   gate = new MusicGate({ threshold: settings.threshold, attackSec: settings.attack, releaseSec: settings.silence });
   session = null;
   running = true;
+  wasWarmingUp = true;
 
   document.body.classList.add('is-running');
   el.monitor.hidden = false;
@@ -217,6 +219,17 @@ function onFrame({ analyser, samples }) {
   if (!detector || !gate) return;
   features = detector.step(analyser, samples / capture.sampleRate, gate.playing);
   const now = capture.audioTime;
+
+  // Замер фона — исходная точка всей оценки: если он врёт, врёт и всё
+  // остальное. В журнале должно быть видно, чем он кончился.
+  if (wasWarmingUp && !features.warmingUp) {
+    wasWarmingUp = false;
+    if (features.startedInMusic) {
+      log('warn', `при запуске уже что-то играло — фон не измерен, принят ${features.floorDb.toFixed(0)} дБ`);
+    } else {
+      log('', `фон комнаты ${features.floorDb.toFixed(0)} дБ`);
+    }
+  }
 
   const event = gate.step(features.score, now);
   if (event === 'start') startSession();
@@ -460,8 +473,9 @@ function render() {
 
   el.readout.textContent =
     `уровень ${features.rmsDb.toFixed(0)} дБ · фон ${features.floorDb.toFixed(0)} дБ · ` +
-    `превышение ${features.snr.toFixed(0)} дБ · плоскостность ${features.flatness.toFixed(3)} · ` +
-    `бас ${(features.bassRatio * 100).toFixed(0)}%` +
+    `превышение ${features.snr.toFixed(0)} дБ · размах ${features.dynamicsDb.toFixed(1)} дБ · ` +
+    `плоскостность ${features.flatness.toFixed(3)} · ` +
+    `бас ${(features.bassRatio * 100).toFixed(0)}% · верх ${(features.highRatio * 100).toFixed(0)}%` +
     (session && Number.isFinite(session.nextCheckAt)
       ? ` · след. проверка через ${Math.max(0, Math.round(session.nextCheckAt - capture.audioTime))} с`
       : '');

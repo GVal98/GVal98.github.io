@@ -1,29 +1,47 @@
 // Определение «играет ли музыка» по признакам спектра — без нейросетей.
 //
-// Четыре признака, каждый закрывает свой класс ложных срабатываний:
+// Пять признаков, каждый закрывает свой класс ложных срабатываний:
 //   level — громкость над шумовым полом комнаты (отсекает тишину);
 //   tone  — спектральная плоскостность (отсекает шипение, вентилятор, дорогу),
 //           входит и слагаемым, и множителем-вето: слагаемого мало, см. ниже;
 //   bass  — доля энергии в низах (у музыки бас есть почти всегда, у речи нет);
-//   flow  — непрерывность (в речи паузы между фразами, в музыке их нет).
+//   flow  — непрерывность (в речи паузы между фразами, в музыке их нет);
+//   dyn   — размах громкости (у музыки он есть всегда, у гула — нет),
+//           только множитель-вето, слагаемым не входит.
 
 const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
 
 const INITIAL_FLOOR_DB = -75;  // только до первого честного замера комнаты
 const MIN_FLOOR_DB = -95;      // ниже — цифровая тишина, это не измерение
-const FLOOR_RISE_DB_PER_SEC = 0.05;
+// Вверх фон идёт быстро, потому что расти ему всё равно некуда выше windowMin —
+// самого тихого, что мы слышали за минуту. Ограничитель тут именно этот минимум,
+// а не скорость. Прежние 0.05 дБ/с ничего дополнительно не защищали, зато делали
+// любую ошибку замера вечной: с занижения на 20 дБ фон выбирался бы 7 минут,
+// и всё это время превышение было бы завышено ровно на те же 20 дБ.
+const FLOOR_RISE_DB_PER_SEC = 3;
 const FLOOR_WINDOW_SEC = 60;   // окно скользящего минимума для подъёма фона
-const WARMUP_SEC = 1.5;        // слушаем комнату молча, прежде чем что-то решать
+// Первые кадры потока — не комната. Микрофон телефона выходит на режим не
+// мгновенно, а палец в момент нажатия «Начать» добавляет низкочастотный стук
+// в корпус. И то и другое попадает ровно в замер фона и уводит его на десятки
+// децибел. Дешевле выкинуть начало потока, чем потом угадывать, что это было.
+const SETTLE_SEC = 0.6;
+const WARMUP_SEC = 2;          // слушаем комнату молча, прежде чем что-то решать
 const WARMUP_QUANTILE = 0.25;  // квантиль вместо минимума — устойчиво к выбросам
 
 // Приложение могли включить, когда музыка уже играет. Тогда прогрев примет её
 // за фон комнаты, сядет на её уровень — и музыка не будет слышна никогда.
 // Такой кадр опознаётся по трём приметам сразу: он громкий, спектр тональный
-// и басовитый. Тихая комната тоже бывает «тональной» (почти весь спектр лежит
-// на нижней границе анализатора), поэтому громкость в условии обязательна.
+// и в нём есть верх. Тихая комната тоже бывает «тональной» (почти весь спектр
+// лежит на нижней границе анализатора), поэтому громкость в условии обязательна.
+//
+// Третьим условием раньше был бас — и это открывало дверь ровно тому, от чего
+// защищаемся. Стук по корпусу, ветер, шаги, гул вентиляции — всё это низ и
+// только низ: громко, «тонально» и басовито, то есть музыка по всем трём
+// приметам. Верх подделать нечем: у замеренной ночной комнаты выше килогерца
+// лежит 1.4% энергии, у музыки с телефонного микрофона — 32–84%.
 const LOUD_START_DB = -50;
 const LOUD_START_FLATNESS = 0.12;
-const LOUD_START_BASS = 0.10;
+const LOUD_START_HIGH = 0.10;
 const LOUD_START_MARGIN_DB = 22;  // на столько ниже сигнала ставим фон в этом случае
 const FLOOR_HOLD_LIMIT_SEC = 600; // предохранитель: фон не морозим навсегда
 
@@ -33,10 +51,26 @@ const FLOOR_HOLD_LIMIT_SEC = 600; // предохранитель: фон не �
 const PRESENCE_LO_DB = 3;
 const PRESENCE_HI_DB = 9;
 
-/** q-квантиль по копии массива; массив короткий (~35 значений за прогрев). */
+// Размах громкости за последние секунды. Музыка дышит: доли, паузы, затухания.
+// Гул не дышит вовсе — по замерам ночной комнаты с телефона размах держится
+// 1.4–2.8 дБ за любое четырёхсекундное окно, у музыки в тех же окнах 2.5–13 дБ.
+// Это единственный признак, который не зависит от оценки шумового пола, и
+// потому единственный, который остаётся верным, когда пол занижен.
+const DYN_WINDOW_SEC = 4;
+const DYN_LO_DB = 2;
+const DYN_HI_DB = 5;
+
+/** q-квантиль по копии массива; массив короткий (~50 значений за прогрев). */
 function quantile(values, q) {
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
+}
+
+/** Размах между 10-м и 90-м процентилями — устойчив к одиночному щелчку. */
+function spread(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const at = (q) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
+  return at(0.9) - at(0.1);
 }
 
 export const DEFAULT_TUNING = {
@@ -63,18 +97,23 @@ export class MusicDetector {
       bassLo: hz(50), bassHi: hz(250),
       toneLo: hz(100), toneHi: hz(6000),
       fullLo: hz(50), fullHi: hz(6000),
+      highLo: hz(1000),
     };
 
     this.floorDb = INITIAL_FLOOR_DB;
+    this.settleLeft = SETTLE_SEC;
     this.warmupLeft = WARMUP_SEC;
     this.warmupRms = [];   // кадры, похожие на фон
     this.warmupAll = [];   // все кадры прогрева
+    this.startedInMusic = false; // прогрев не нашёл ни одного немузыкального кадра
     this.holdSec = 0;
     this.secMin = Infinity;   // минимум текущей секунды
     this.secLeft = 1;
     this.minWindow = [];      // посекундные минимумы за FLOOR_WINDOW_SEC
     this.activity = [];         // история «кадр активен?» для непрерывности
     this.activityCapacity = 70; // ~3 c
+    this.levels = [];           // история rmsDb за DYN_WINDOW_SEC
+    this.dynamicsDb = 0;
     this.score = 0;
   }
 
@@ -103,15 +142,30 @@ export class MusicDetector {
     }
     const flatness = Math.exp(logSum / toneN) / (toneSum / toneN);
 
-    let bassE = 0, fullE = 0;
+    let bassE = 0, highE = 0, fullE = 0;
     for (let i = band.fullLo; i <= band.fullHi; i++) {
       const p = Math.pow(10, this.freq[i] / 10);
       fullE += p;
       if (i >= band.bassLo && i <= band.bassHi) bassE += p;
+      if (i >= band.highLo) highE += p;
     }
     const bassRatio = fullE > 0 ? bassE / fullE : 0;
+    const highRatio = fullE > 0 ? highE / fullE : 0;
 
-    this._updateFloor(rmsDb, dt, holdFloor, flatness, bassRatio);
+    // Кадры установления в историю не идут: стук по корпусу — это всплеск,
+    // и он завысил бы размах ровно там, где размах служит защитой.
+    const settling = this.settleLeft > 0;
+    if (!settling) {
+      const capacity = Math.max(8, Math.round(DYN_WINDOW_SEC / dt));
+      this.levels.push(rmsDb);
+      while (this.levels.length > capacity) this.levels.shift();
+      // На неполном окне размах занижен просто потому, что данных мало; пока
+      // окно не набрано хотя бы наполовину, честнее считать его нулевым —
+      // оценка всё равно обнулена прогревом.
+      this.dynamicsDb = this.levels.length >= capacity / 2 ? spread(this.levels) : 0;
+    }
+
+    this._updateFloor(rmsDb, dt, holdFloor, flatness, highRatio);
 
     const t = this.tuning;
     const snr = rmsDb - this.floorDb;
@@ -128,7 +182,7 @@ export class MusicDetector {
     // вообще что-то звучит. Тихая комната сама по себе «тональна» (почти весь
     // спектр лежит на нижней границе анализатора, торчат пара бугров от гула)
     // и «басовита» — вместе это 0.35 веса ни за что. Отсюда множитель присутствия.
-    const warmingUp = this.warmupLeft > 0;
+    const warmingUp = settling || this.warmupLeft > 0;
     const presence = clamp01((snr - PRESENCE_LO_DB) / (PRESENCE_HI_DB - PRESENCE_LO_DB));
     // Тональность обязана быть вето, а не слагаемым. Слагаемым она бессильна:
     // у устойчивого шума flow насыщается в единицу, а если в шуме есть низы
@@ -138,56 +192,83 @@ export class MusicDetector {
     // Множителем та же величина работает: у музыки плоскостность 0.02–0.12,
     // вето равно единице и на замеренные сценарии не влияет.
     const toneVeto = clamp01((t.flatnessVeto - flatness) / (t.flatnessVeto - t.flatnessHigh));
+    // Второе вето — по размаху громкости. Присутствие держится на оценке
+    // шумового пола, а пол — единственное, что можно измерить неправильно:
+    // хватит стука в момент старта или микрофона, выходящего на режим, и
+    // комната объявляется на 20 дБ громче себя. Тогда level, flow и presence
+    // разом уходят в единицу, а tone и bass у тихой комнаты и без того единица —
+    // оценка 100% на пустом месте. Размах громкости этой ошибке не подвержен:
+    // он считается по разности уровней, и общий сдвиг пола из него сокращается.
+    const dyn = clamp01((this.dynamicsDb - DYN_LO_DB) / (DYN_HI_DB - DYN_LO_DB));
     const raw = warmingUp
       ? 0
-      : presence * toneVeto * (w.level * level + w.flow * flow + w.tone * tone + w.bass * bass);
+      : presence * toneVeto * dyn * (w.level * level + w.flow * flow + w.tone * tone + w.bass * bass);
     // Сглаживание: у музыки размах громкости десятки децибел, и на отдельных
     // тихих долях оценка проваливается. Гейту нужны 2.5 с подряд выше порога —
     // один провал сбрасывает отсчёт, поэтому усредняем примерно за треть секунды.
     this.score += (raw - this.score) * 0.12;
 
     return {
-      score: this.score, level, tone, bass, flow,
-      rmsDb, floorDb: this.floorDb, snr, flatness, bassRatio, warmingUp,
+      score: this.score, level, tone, bass, flow, dyn,
+      rmsDb, floorDb: this.floorDb, snr, flatness, bassRatio, highRatio,
+      dynamicsDb: this.dynamicsDb, warmingUp, startedInMusic: this.startedInMusic,
     };
   }
 
   /**
    * Оценка шумового фона по принципу минимальной статистики: вниз следуем
-   * быстро, вверх — медленно и только пока музыка не играет.
+   * за сигналом, вверх — только до самого тихого, что слышали за минуту,
+   * и только пока музыка не играет.
    *
    * Симметричное окно тут не работает: за минуту непрерывного трека фон
    * дорос бы до уровня самой музыки, превышение упало бы до нуля и детектор
    * потерял бы песню на середине. По той же причине нельзя пересчитывать фон
    * во время воспроизведения — он должен описывать комнату, а не сигнал.
    *
-   * Но и стартовать с константы нельзя: при подъёме 0.6 дБ/с фон добирается
-   * до реальной комнаты десятки секунд, всё это время превышение завышено на
-   * те же 15–20 дБ, и гейт защёлкивается на тишине за 2.5 с — а дальше фон уже
-   * заморожен воспроизведением и разжаться не может. Поэтому первые секунды
-   * фон именно измеряется.
+   * Но и стартовать с константы нельзя: пока фон ползёт к реальной комнате,
+   * превышение завышено на все 15–20 дБ, и гейт защёлкивается на тишине за
+   * 2.5 с — а дальше фон уже заморожен воспроизведением. Поэтому первые
+   * секунды фон именно измеряется, а не угадывается.
+   *
+   * И всё же замер может выйти неверным — микрофон в этот момент только
+   * выходит на режим. Поэтому у ошибки должен быть выход: подъём быстрый
+   * (ограничитель тут windowMin, а не скорость), а заморозка снимается,
+   * как только сигнал перестаёт быть похожим на живой звук.
    */
-  _updateFloor(rmsDb, dt, holdFloor, flatness, bassRatio) {
+  _updateFloor(rmsDb, dt, holdFloor, flatness, highRatio) {
     // Пока поток не пошёл, приходят кадры цифровой тишины — это не комната.
     if (rmsDb <= MIN_FLOOR_DB) return;
+
+    // Микрофон ещё выходит на режим, а по корпусу только что стукнули пальцем.
+    if (this.settleLeft > 0) {
+      this.settleLeft -= dt;
+      return;
+    }
 
     if (this.warmupLeft > 0) {
       this.warmupLeft -= dt;
       this.warmupAll.push(rmsDb);
       const musical = rmsDb > LOUD_START_DB
         && flatness < LOUD_START_FLATNESS
-        && bassRatio > LOUD_START_BASS;
+        && highRatio > LOUD_START_HIGH;
       if (!musical) this.warmupRms.push(rmsDb);
       // Если за весь прогрев не нашлось ни одного немузыкального кадра —
       // музыка играла ещё до запуска. Фон тогда не измерить, ставим его
       // заведомо ниже сигнала, иначе он навсегда останется глух к этому треку.
-      this.floorDb = this.warmupRms.length
-        ? quantile(this.warmupRms, WARMUP_QUANTILE)
-        : quantile(this.warmupAll, WARMUP_QUANTILE) - LOUD_START_MARGIN_DB;
+      this.startedInMusic = this.warmupRms.length === 0;
+      this.floorDb = this.startedInMusic
+        ? quantile(this.warmupAll, WARMUP_QUANTILE) - LOUD_START_MARGIN_DB
+        : quantile(this.warmupRms, WARMUP_QUANTILE);
       return;
     }
 
-    this.holdSec = holdFloor ? this.holdSec + dt : 0;
+    // Заморозка фона нужна, только пока звучит что-то живое. Стоячий сигнал
+    // музыкой не бывает, а если гейт на нём всё-таки защёлкнулся, заморозка
+    // замыкает ошибку на себя: фон занижен → «играет музыка» → фон заморожен
+    // → фон занижен, и так до конца сессии. Размах громкости эту петлю рвёт.
+    const alive = this.dynamicsDb >= DYN_LO_DB;
+    this.holdSec = holdFloor && alive ? this.holdSec + dt : 0;
+    const frozen = holdFloor && alive && this.holdSec <= FLOOR_HOLD_LIMIT_SEC;
 
     // Скользящий минимум за минуту. Подниматься фон может только к самому
     // тихому, что мы слышали недавно, а не к текущему уровню: иначе непрерывная
@@ -204,7 +285,7 @@ export class MusicDetector {
 
     if (rmsDb < this.floorDb) {
       this.floorDb += (rmsDb - this.floorDb) * 0.15;
-    } else if (!holdFloor || this.holdSec > FLOOR_HOLD_LIMIT_SEC) {
+    } else if (!frozen) {
       this.floorDb = Math.min(this.floorDb + FLOOR_RISE_DB_PER_SEC * dt, windowMin);
     }
   }
