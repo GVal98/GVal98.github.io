@@ -51,21 +51,6 @@ export function trackKey(result) {
   return `${(result.artist || '').toLowerCase().trim()}::${(result.title || '').toLowerCase().trim()}`;
 }
 
-/** timecode вида "MM:SS" или "HH:MM:SS" → секунды. */
-export function timecodeSeconds(result) {
-  const tc = result?.timecode;
-  if (!tc) return null;
-  const parts = tc.split(':').map(Number);
-  if (parts.some(Number.isNaN)) return null;
-  return parts.reduce((acc, p) => acc * 60 + p, 0);
-}
-
-/** Длительность трека в секундах, если её отдал Apple Music. */
-export function trackDuration(result) {
-  const ms = result?.apple_music?.durationInMillis;
-  return typeof ms === 'number' ? ms / 1000 : null;
-}
-
 /** Обложка нужного размера — в ответе URL приходит с плейсхолдерами {w}x{h}. */
 export function artworkUrl(result, size = 300) {
   const url = result?.apple_music?.artwork?.url;

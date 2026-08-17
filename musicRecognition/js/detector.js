@@ -2,21 +2,49 @@
 //
 // Четыре признака, каждый закрывает свой класс ложных срабатываний:
 //   level — громкость над шумовым полом комнаты (отсекает тишину);
-//   tone  — спектральная плоскостность (отсекает шипение, вентилятор, дорогу);
+//   tone  — спектральная плоскостность (отсекает шипение, вентилятор, дорогу),
+//           входит и слагаемым, и множителем-вето: слагаемого мало, см. ниже;
 //   bass  — доля энергии в низах (у музыки бас есть почти всегда, у речи нет);
 //   flow  — непрерывность (в речи паузы между фразами, в музыке их нет).
 
 const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
 
-const INITIAL_FLOOR_DB = -75;  // предположение о тихой комнате до первых измерений
-const MIN_FLOOR_DB = -95;      // ниже — цифровая тишина, туда проваливаться нельзя
-const FLOOR_RISE_DB_PER_SEC = 0.6;
+const INITIAL_FLOOR_DB = -75;  // только до первого честного замера комнаты
+const MIN_FLOOR_DB = -95;      // ниже — цифровая тишина, это не измерение
+const FLOOR_RISE_DB_PER_SEC = 0.05;
+const FLOOR_WINDOW_SEC = 60;   // окно скользящего минимума для подъёма фона
+const WARMUP_SEC = 1.5;        // слушаем комнату молча, прежде чем что-то решать
+const WARMUP_QUANTILE = 0.25;  // квантиль вместо минимума — устойчиво к выбросам
+
+// Приложение могли включить, когда музыка уже играет. Тогда прогрев примет её
+// за фон комнаты, сядет на её уровень — и музыка не будет слышна никогда.
+// Такой кадр опознаётся по трём приметам сразу: он громкий, спектр тональный
+// и басовитый. Тихая комната тоже бывает «тональной» (почти весь спектр лежит
+// на нижней границе анализатора), поэтому громкость в условии обязательна.
+const LOUD_START_DB = -50;
+const LOUD_START_FLATNESS = 0.12;
+const LOUD_START_BASS = 0.10;
+const LOUD_START_MARGIN_DB = 22;  // на столько ниже сигнала ставим фон в этом случае
+const FLOOR_HOLD_LIMIT_SEC = 600; // предохранитель: фон не морозим навсегда
+
+// Спектр описывает, ЧТО звучит, и осмысленен, только если что-то звучит.
+// Не порог, а плавный переход: у музыки размах громкости десятки децибел,
+// и жёсткая отсечка обнуляла бы оценку на каждом тихом такте.
+const PRESENCE_LO_DB = 3;
+const PRESENCE_HI_DB = 9;
+
+/** q-квантиль по копии массива; массив короткий (~35 значений за прогрев). */
+function quantile(values, q) {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
+}
 
 export const DEFAULT_TUNING = {
   minSnrDb: 8,        // на сколько дБ сигнал должен превышать шумовой пол
   snrRangeDb: 14,     // при таком превышении level = 1
   flatnessLow: 0.05,  // плоскостность музыки
   flatnessHigh: 0.40, // плоскостность шума
+  flatnessVeto: 0.55, // выше этого оценка гасится вовсе: это широкополосный шум
   bassLow: 0.03,
   bassHigh: 0.18,
   weights: { level: 0.40, flow: 0.25, tone: 0.20, bass: 0.15 },
@@ -38,6 +66,13 @@ export class MusicDetector {
     };
 
     this.floorDb = INITIAL_FLOOR_DB;
+    this.warmupLeft = WARMUP_SEC;
+    this.warmupRms = [];   // кадры, похожие на фон
+    this.warmupAll = [];   // все кадры прогрева
+    this.holdSec = 0;
+    this.secMin = Infinity;   // минимум текущей секунды
+    this.secLeft = 1;
+    this.minWindow = [];      // посекундные минимумы за FLOOR_WINDOW_SEC
     this.activity = [];         // история «кадр активен?» для непрерывности
     this.activityCapacity = 70; // ~3 c
     this.score = 0;
@@ -76,7 +111,7 @@ export class MusicDetector {
     }
     const bassRatio = fullE > 0 ? bassE / fullE : 0;
 
-    this._updateFloor(rmsDb, dt, holdFloor);
+    this._updateFloor(rmsDb, dt, holdFloor, flatness, bassRatio);
 
     const t = this.tuning;
     const snr = rmsDb - this.floorDb;
@@ -89,13 +124,31 @@ export class MusicDetector {
     const flow = this.activity.reduce((a, b) => a + b, 0) / this.activity.length;
 
     const w = t.weights;
-    const raw = w.level * level + w.flow * flow + w.tone * tone + w.bass * bass;
-    // Лёгкое сглаживание, чтобы одиночный хлопок дверью не дёргал состояние.
-    this.score += (raw - this.score) * 0.25;
+    // Спектральные признаки описывают, ЧТО звучит, и осмысленны, только если
+    // вообще что-то звучит. Тихая комната сама по себе «тональна» (почти весь
+    // спектр лежит на нижней границе анализатора, торчат пара бугров от гула)
+    // и «басовита» — вместе это 0.35 веса ни за что. Отсюда множитель присутствия.
+    const warmingUp = this.warmupLeft > 0;
+    const presence = clamp01((snr - PRESENCE_LO_DB) / (PRESENCE_HI_DB - PRESENCE_LO_DB));
+    // Тональность обязана быть вето, а не слагаемым. Слагаемым она бессильна:
+    // у устойчивого шума flow насыщается в единицу, а если в шуме есть низы
+    // (кондиционер, вытяжка, дорога за окном) — то и bass. Вместе это 0.25 + 0.15,
+    // уже выше порога 0.35, и tone = 0 ничего не решает: гейт защёлкивается
+    // на вентиляторе, фон замерзает и статус «играет музыка» висит минутами.
+    // Множителем та же величина работает: у музыки плоскостность 0.02–0.12,
+    // вето равно единице и на замеренные сценарии не влияет.
+    const toneVeto = clamp01((t.flatnessVeto - flatness) / (t.flatnessVeto - t.flatnessHigh));
+    const raw = warmingUp
+      ? 0
+      : presence * toneVeto * (w.level * level + w.flow * flow + w.tone * tone + w.bass * bass);
+    // Сглаживание: у музыки размах громкости десятки децибел, и на отдельных
+    // тихих долях оценка проваливается. Гейту нужны 2.5 с подряд выше порога —
+    // один провал сбрасывает отсчёт, поэтому усредняем примерно за треть секунды.
+    this.score += (raw - this.score) * 0.12;
 
     return {
       score: this.score, level, tone, bass, flow,
-      rmsDb, floorDb: this.floorDb, snr, flatness, bassRatio,
+      rmsDb, floorDb: this.floorDb, snr, flatness, bassRatio, warmingUp,
     };
   }
 
@@ -107,13 +160,52 @@ export class MusicDetector {
    * дорос бы до уровня самой музыки, превышение упало бы до нуля и детектор
    * потерял бы песню на середине. По той же причине нельзя пересчитывать фон
    * во время воспроизведения — он должен описывать комнату, а не сигнал.
+   *
+   * Но и стартовать с константы нельзя: при подъёме 0.6 дБ/с фон добирается
+   * до реальной комнаты десятки секунд, всё это время превышение завышено на
+   * те же 15–20 дБ, и гейт защёлкивается на тишине за 2.5 с — а дальше фон уже
+   * заморожен воспроизведением и разжаться не может. Поэтому первые секунды
+   * фон именно измеряется.
    */
-  _updateFloor(rmsDb, dt, holdFloor) {
-    const observed = Math.max(rmsDb, MIN_FLOOR_DB);
-    if (observed < this.floorDb) {
-      this.floorDb += (observed - this.floorDb) * 0.15;
-    } else if (!holdFloor) {
-      this.floorDb = Math.min(this.floorDb + FLOOR_RISE_DB_PER_SEC * dt, observed);
+  _updateFloor(rmsDb, dt, holdFloor, flatness, bassRatio) {
+    // Пока поток не пошёл, приходят кадры цифровой тишины — это не комната.
+    if (rmsDb <= MIN_FLOOR_DB) return;
+
+    if (this.warmupLeft > 0) {
+      this.warmupLeft -= dt;
+      this.warmupAll.push(rmsDb);
+      const musical = rmsDb > LOUD_START_DB
+        && flatness < LOUD_START_FLATNESS
+        && bassRatio > LOUD_START_BASS;
+      if (!musical) this.warmupRms.push(rmsDb);
+      // Если за весь прогрев не нашлось ни одного немузыкального кадра —
+      // музыка играла ещё до запуска. Фон тогда не измерить, ставим его
+      // заведомо ниже сигнала, иначе он навсегда останется глух к этому треку.
+      this.floorDb = this.warmupRms.length
+        ? quantile(this.warmupRms, WARMUP_QUANTILE)
+        : quantile(this.warmupAll, WARMUP_QUANTILE) - LOUD_START_MARGIN_DB;
+      return;
+    }
+
+    this.holdSec = holdFloor ? this.holdSec + dt : 0;
+
+    // Скользящий минимум за минуту. Подниматься фон может только к самому
+    // тихому, что мы слышали недавно, а не к текущему уровню: иначе непрерывная
+    // музыка постепенно объявляет фоном сама себя и становится не слышна.
+    this.secMin = Math.min(this.secMin, rmsDb);
+    this.secLeft -= dt;
+    if (this.secLeft <= 0) {
+      this.minWindow.push(this.secMin);
+      if (this.minWindow.length > FLOOR_WINDOW_SEC) this.minWindow.shift();
+      this.secMin = Infinity;
+      this.secLeft = 1;
+    }
+    const windowMin = Math.min(this.secMin, ...this.minWindow);
+
+    if (rmsDb < this.floorDb) {
+      this.floorDb += (rmsDb - this.floorDb) * 0.15;
+    } else if (!holdFloor || this.holdSec > FLOOR_HOLD_LIMIT_SEC) {
+      this.floorDb = Math.min(this.floorDb + FLOOR_RISE_DB_PER_SEC * dt, windowMin);
     }
   }
 

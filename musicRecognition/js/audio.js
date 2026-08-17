@@ -71,23 +71,81 @@ class RingBuffer {
   }
 }
 
+const FIR_HALF_AT_3X = 16; // полуширина ядра при прореживании ровно втрое
+const PHASES = 128;        // на столько шагов дробится задержка внутри отсчёта
+
 /**
- * Даунсэмплинг усреднением по окну источника — заодно работает
- * как грубый ФНЧ, так что алиасинга после децимации не будет.
+ * Банк ядер ФНЧ на PHASES дробных сдвигов центра.
+ *
+ * Ядро приходится готовить заранее: синусов в нём (2·half+1)·PHASES, а считать
+ * их заново для каждого выходного отсчёта было бы на порядок дороже самой
+ * свёртки. Зато сама свёртка потом идёт по таблице.
+ */
+function polyphaseBank(cutoffRatio, half) {
+  const taps = half * 2 + 1;
+  const bank = new Float32Array(PHASES * taps);
+  for (let p = 0; p < PHASES; p++) {
+    const frac = p / PHASES;
+    let sum = 0;
+    for (let t = 0; t < taps; t++) {
+      const x = t - half - frac;
+      const sinc = Math.abs(x) < 1e-9
+        ? 2 * cutoffRatio
+        : Math.sin(2 * Math.PI * cutoffRatio * x) / (Math.PI * x);
+      // Окно привязано к номеру отвода, а не к x: иначе оно съезжало бы вместе
+      // с синком и полоса пропускания гуляла бы от фазы к фазе.
+      bank[p * taps + t] = sinc * (0.54 - 0.46 * Math.cos((2 * Math.PI * t) / (taps - 1)));
+      sum += bank[p * taps + t];
+    }
+    // Нормировка на фазу, а не на всё ядро: иначе на дробных сдвигах усиление
+    // по постоянному току чуть плавает и появляется низкочастотная модуляция.
+    for (let t = 0; t < taps; t++) bank[p * taps + t] /= sum;
+  }
+  return bank;
+}
+
+/**
+ * Даунсэмплинг с ФНЧ и дробной задержкой.
+ *
+ * Две ловушки, обе замерены на тонах:
+ *
+ * 1. Усреднение по окну источника фильтрует слишком слабо: у бокскара из трёх
+ *    отсчётов на 10 кГц всего −6 дБ, и всё выше новой частоты Найквиста
+ *    заворачивается обратно в 0–8 кГц — ровно поверх полосы отпечатка.
+ *
+ * 2. Брать ближайший целый отсчёт вместо дробного центра — это не «дрожание
+ *    в десяток микросекунд», а посэмпловый джиттер, то есть паразитная фазовая
+ *    модуляция. При 48 кГц отношение ровно 3, дробной части не возникает и всё
+ *    выглядит чисто; при 44100 (ratio 2.75625) дробная часть пробегает 160 фаз,
+ *    и на 5 кГц спуры вылезали на −13 дБ от несущей. Отсюда банк дробных сдвигов.
  */
 export function resample(input, inRate, outRate) {
-  if (inRate === outRate) return input;
+  if (inRate <= outRate) return input;
   const ratio = inRate / outRate;
+  // Переходная полоса окна Хэмминга — около 3.3/taps от входной частоты. При
+  // фиксированной длине ядра и большом ratio она шире, чем расстояние до зоны
+  // заворота, и фильтр до неё просто не дотягивается (на 96 кГц алиас давился
+  // всего на −21 дБ). Держим полосу пропорциональной прореживанию.
+  const half = Math.max(8, Math.round((FIR_HALF_AT_3X * ratio) / 3));
+  const taps = half * 2 + 1;
+  // Срез с запасом ниже выходного Найквиста: у фильтра конечной длины спад
+  // не отвесный, и посадить край ровно на 8 кГц значит пропустить его половину.
+  const bank = polyphaseBank(0.45 / ratio, half);
+
   const outLen = Math.floor(input.length / ratio);
   const out = new Float32Array(outLen);
+  const n = input.length;
   for (let i = 0; i < outLen; i++) {
-    const from = i * ratio;
-    const to = from + ratio;
-    const s = Math.floor(from);
-    const e = Math.min(Math.ceil(to), input.length);
-    let sum = 0;
-    for (let j = s; j < e; j++) sum += input[j];
-    out[i] = e > s ? sum / (e - s) : 0;
+    const center = i * ratio;
+    let base = Math.floor(center);
+    let p = Math.round((center - base) * PHASES);
+    if (p === PHASES) { p = 0; base++; } // округление вверх переносит в следующий отсчёт
+    const off = p * taps + half - base;
+    const lo = Math.max(0, base - half);
+    const hi = Math.min(n - 1, base + half);
+    let acc = 0;
+    for (let j = lo; j <= hi; j++) acc += input[j] * bank[off + j];
+    out[i] = acc;
   }
   return out;
 }
@@ -114,7 +172,10 @@ export function encodeWav(samples, sampleRate) {
   let o = 44;
   for (let i = 0; i < samples.length; i++, o += 2) {
     const s = Math.max(-1, Math.min(1, samples[i]));
-    view.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    // Округление, а не усечение: setInt16 отбрасывает дробную часть в сторону
+    // нуля, а это лишний младший разряд ошибки (−6 дБ к шуму квантования)
+    // плюс постоянное смещение в полразряда.
+    view.setInt16(o, Math.round(s < 0 ? s * 0x8000 : s * 0x7fff), true);
   }
   return new Blob([view.buffer], { type: 'audio/wav' });
 }
@@ -150,31 +211,17 @@ export class AudioCapture {
     return this.ctx ? this.totalSamples / this.ctx.sampleRate : 0;
   }
 
-  async start(source = 'mic') {
+  async start() {
     // Все три обработки ломают распознавание: шумодав съедает музыку,
     // AGC качает уровень, а эхоподавление вычтет звук собственных колонок.
-    const constraints = {
-      echoCancellation: false,
-      noiseSuppression: false,
-      autoGainControl: false,
-      channelCount: 1,
-    };
-
-    if (source === 'display') {
-      this.stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { width: 1, height: 1, frameRate: 1 },
-        audio: constraints,
-      });
-      if (this.stream.getAudioTracks().length === 0) {
-        this.stream.getTracks().forEach((t) => t.stop());
-        this.stream = null;
-        throw new Error(
-          'Вкладка расшарена без звука. Повторите и включите «Поделиться аудио вкладки».'
-        );
-      }
-    } else {
-      this.stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
-    }
+    this.stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        channelCount: 1,
+      },
+    });
 
     this.ctx = new (window.AudioContext || window.webkitAudioContext)();
     if (this.ctx.state === 'suspended') await this.ctx.resume();
@@ -190,7 +237,7 @@ export class AudioCapture {
 
     await this._attachTap();
 
-    // Если пользователь снимет шаринг из плашки Chrome — узнаем об этом.
+    // Микрофон могут выдернуть из разъёма или отобрать другим приложением.
     this.stream.getTracks().forEach((t) => {
       t.onended = () => this.onTrackEnded && this.onTrackEnded();
     });
@@ -215,8 +262,8 @@ export class AudioCapture {
       this.node = new AudioWorkletNode(this.ctx, 'tap', {
         numberOfInputs: 1,
         numberOfOutputs: 0,
-        // Захват вкладки часто приходит стерео; сводим в моно до процессора,
-        // иначе в буфер попал бы только левый канал.
+        // Часть устройств отдаёт стерео вопреки channelCount: 1; сводим в моно
+        // до процессора, иначе в буфер попал бы только левый канал.
         channelCount: 1,
         channelCountMode: 'explicit',
         processorOptions: { chunkSize: 2048 },
@@ -240,17 +287,18 @@ export class AudioCapture {
     this._mute = mute;
   }
 
-  /**
-   * WAV с последними seconds секундами, но не длиннее maxSeconds
-   * реально накопленного звука.
-   */
+  /** WAV с последними seconds секундами — или меньше, если столько ещё не накопилось. */
   makeClip(seconds) {
     if (!this.ring) return null;
     const want = Math.ceil(seconds * this.ctx.sampleRate);
     const raw = this.ring.readLast(want);
     if (raw.length < this.ctx.sampleRate) return null; // меньше секунды — бессмысленно
-    const down = resample(raw, this.ctx.sampleRate, CLIP_SAMPLE_RATE);
-    return { blob: encodeWav(down, CLIP_SAMPLE_RATE), seconds: raw.length / this.ctx.sampleRate };
+    // Контекст бывает и ниже 16 кГц: Bluetooth-гарнитура в профиле HFP даёт 8000.
+    // resample такой вход отдаёт как есть, так что в заголовок нужна настоящая
+    // частота — иначе клип воспроизводится вдвое быстрее и AudD не найдёт ничего.
+    const rate = Math.min(this.ctx.sampleRate, CLIP_SAMPLE_RATE);
+    const down = resample(raw, this.ctx.sampleRate, rate);
+    return { blob: encodeWav(down, rate), seconds: raw.length / this.ctx.sampleRate };
   }
 
   async stop() {

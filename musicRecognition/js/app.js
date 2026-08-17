@@ -1,21 +1,26 @@
 import { AudioCapture } from './audio.js';
 import { MusicDetector, MusicGate } from './detector.js';
-import { recognize, trackKey, timecodeSeconds, trackDuration, artworkUrl, links, AudDError } from './audd.js';
+import { recognize, trackKey, artworkUrl, links, AudDError } from './audd.js';
 
 const DEFAULTS = {
   token: '',         // пользователь вводит свой; хранится только в localStorage
-  threshold: 0.55,
-  minMusic: 10,      // с начала музыки до первой отправки
+  threshold: 0.35,  // середина коридора между тишиной и музыкой по замерам
+  minMusic: 10,      // сколько музыки должно прозвучать, чтобы поверить (не меньше clip + LEAD_IN)
   clip: 12,          // длина фрагмента для AudD
   silence: 5,        // тишина, после которой трек считается законченным
   attack: 2.5,       // подтверждение начала музыки
-  recheck: true,     // ловить смену трека без паузы
-  recheckEvery: 150, // запасной интервал, если длительность неизвестна
 };
+
+// Первые такты трека — худший материал для отпечатка: интро разрежено (мало
+// спектральных пиков → мало хешей), часто это одинокий инструмент или нарастание
+// из тишины, да и плеер успевает добавить своё плавное включение. Поэтому первый
+// фрагмент берём не от самого начала, а отступив немного вглубь трека.
+const LEAD_IN = 3;
 
 // Если совпадений нет — пробуем ещё несколько раз: начало могло попасть
 // на интро или на разговор диджея.
 const RETRY_DELAYS = [12, 22, 40];
+const REQUEST_TIMEOUT = 30;
 const BUFFER_SECONDS = 30;
 const HISTORY_LIMIT = 100;
 const LS_SETTINGS = 'musicRecognition.settings';
@@ -26,7 +31,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 
 const el = {
   status: $('statusPill'), counter: $('requestCounter'),
-  source: $('sourceSelect'), toggle: $('toggleBtn'), manual: $('manualBtn'),
+  toggle: $('toggleBtn'),
   error: $('errorBox'), monitor: $('monitor'), phase: $('phaseLabel'),
   spectrum: $('spectrum'), scoreFill: $('scoreFill'), scoreMark: $('scoreMark'),
   scoreValue: $('scoreValue'), readout: $('readout'),
@@ -49,6 +54,7 @@ let inFlight = false;
 let requests = 0;
 let running = false;
 let wakeLock = null;
+let rafId = 0;
 const spectrumBars = new Float32Array(72);
 
 /* ------------------------------------------------------------------ хранилище */
@@ -77,10 +83,32 @@ function dur(sec) {
   const s = Math.max(0, Math.round(sec));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
-function log(kind, text) {
+// Услышать, что именно ушло в AudD, — единственный способ отличить «плохо
+// слышно» от «ушёл не тот кусок трека». Держим ссылки на последние клипы;
+// больше нельзя — каждый висит в памяти вкладки, пока URL не отозван.
+const CLIPS_KEPT = 5;
+const clipLinks = [];
+
+function clipLink(blob) {
+  const a = document.createElement('a');
+  a.className = 'log-clip';
+  a.href = URL.createObjectURL(blob);
+  a.download = `clip-${clock(Date.now()).replace(':', '')}.wav`;
+  a.textContent = 'скачать';
+  clipLinks.push(a);
+  while (clipLinks.length > CLIPS_KEPT) {
+    const old = clipLinks.shift();
+    URL.revokeObjectURL(old.href);
+    old.remove(); // ссылка уже мертва, оставлять её в журнале нечестно
+  }
+  return a;
+}
+
+function log(kind, text, clip) {
   const li = document.createElement('li');
   if (kind) li.className = kind;
   li.innerHTML = `<b>${clock(Date.now())}</b><span>${esc(text)}</span>`;
+  if (clip) li.querySelector('span').append(clipLink(clip));
   el.log.prepend(li);
   while (el.log.children.length > 200) el.log.lastChild.remove();
 }
@@ -123,19 +151,23 @@ async function start() {
   el.toggle.disabled = true;
   // Пока браузер показывает запрос доступа, промис висит без единого признака
   // жизни в интерфейсе — говорим, чего ждём.
-  setStatus('busy', el.source.value === 'display' ? 'Выберите вкладку…' : 'Жду доступ к микрофону…');
+  setStatus('busy', 'Жду доступ к микрофону…');
   capture = new AudioCapture({ bufferSeconds: BUFFER_SECONDS, onFrame });
-  capture.onTrackEnded = () => { log('warn', 'источник звука отключён'); stop(); };
+  capture.onTrackEnded = () => { log('warn', 'микрофон отключён'); stop(); };
 
   try {
-    await capture.start(el.source.value);
+    await capture.start();
   } catch (e) {
+    // getUserMedia мог уже отдать поток, а упасть — AudioContext или ворклет.
+    // Без остановки индикатор записи горит до закрытия вкладки, а следующее
+    // нажатие «Начать» открывает второй поток поверх первого.
+    try { await capture.stop(); } catch { /* останавливать нечего */ }
     capture = null;
     el.toggle.disabled = false;
     showError(
-      e.name === 'NotAllowedError' ? 'Доступ к звуку не разрешён. Разрешите его в адресной строке и попробуйте снова.'
+      e.name === 'NotAllowedError' ? 'Доступ к микрофону не разрешён. Разрешите его в адресной строке и попробуйте снова.'
       : e.name === 'NotFoundError' ? 'Не найден микрофон.'
-      : e.message || 'Не удалось получить звук.'
+      : e.message || 'Не удалось получить звук с микрофона.'
     );
     setStatus('error', 'Ошибка');
     return;
@@ -151,18 +183,18 @@ async function start() {
   el.toggle.disabled = false;
   el.toggle.textContent = 'Остановить';
   el.toggle.classList.replace('btn--primary', 'btn--stop');
-  el.manual.disabled = false;
-  el.source.disabled = true;
   refreshStatus();
-  log('ok', `слушаю: ${el.source.value === 'display' ? 'звук вкладки' : 'микрофон'}, ${capture.sampleRate} Гц`);
+  log('ok', `слушаю микрофон, ${capture.sampleRate} Гц`);
 
   requestWakeLock();
-  requestAnimationFrame(render);
+  rafId = requestAnimationFrame(render);
 }
 
 async function stop() {
   if (!running && !capture) return;
   running = false;
+  cancelAnimationFrame(rafId);
+  rafId = 0;
   if (session) endSession();
   if (capture) { await capture.stop(); capture = null; }
   detector = null;
@@ -173,8 +205,6 @@ async function stop() {
   el.toggle.textContent = 'Начать слушать';
   el.toggle.classList.replace('btn--stop', 'btn--primary');
   el.toggle.disabled = false;
-  el.manual.disabled = true;
-  el.source.disabled = false;
   el.phase.textContent = 'остановлено';
   refreshStatus();
   releaseWakeLock();
@@ -193,7 +223,7 @@ function onFrame({ analyser, samples }) {
   else if (event === 'stop') endSession();
 
   if (session && !inFlight && now >= session.nextCheckAt) {
-    runRecognition(session.entry ? 'recheck' : 'first');
+    runRecognition();
   }
 }
 
@@ -202,7 +232,10 @@ function startSession() {
     startedAt: gate.startedAt,
     startedAtWall: Date.now(),
     attempts: 0,
-    nextCheckAt: gate.startedAt + settings.minMusic,
+    // Ждём не меньше, чем нужно, чтобы фрагмент целиком набрался музыкой уже
+    // после интро. Иначе в AudD уходит начало трека вперемешку с комнатой —
+    // ровно тот случай, когда первый запрос молчит, а повтор находит.
+    nextCheckAt: gate.startedAt + Math.max(settings.minMusic, settings.clip + LEAD_IN),
     entry: null,
   };
   document.body.classList.add('is-music');
@@ -229,47 +262,54 @@ function closeEntry(entry) {
 
 /* ------------------------------------------------------------- распознавание */
 
-async function runRecognition(reason) {
-  if (inFlight || !capture) return;
+async function runRecognition() {
+  if (inFlight || !capture || !session) return;
 
   const s = session;
-  // Для первой попытки не захватываем лишнюю тишину до начала музыки:
-  // берём ровно столько, сколько её уже прозвучало, плюс 2 с запаса.
-  const seconds = reason === 'first' && s
-    ? Math.min(settings.clip, capture.audioTime - s.startedAt + 2)
-    : settings.clip;
+  // Тишина до начала музыки в отпечатке — мёртвый груз: она отъедает секунды
+  // у единственного фрагмента, который мы отправляем. Берём не больше, чем
+  // музыки реально прозвучало.
+  const seconds = Math.min(settings.clip, capture.audioTime - s.startedAt);
 
   const clip = capture.makeClip(seconds);
   if (!clip) return;
 
   inFlight = true;
   refreshStatus();
-  log('', `отправляю ${clip.seconds.toFixed(1)} с (${Math.round(clip.blob.size / 1024)} КБ)`);
+  log('', `отправляю ${clip.seconds.toFixed(1)} с (${Math.round(clip.blob.size / 1024)} КБ)`, clip.blob);
 
   try {
-    const result = await recognize(clip.blob, settings.token);
+    // Без таймаута повисший fetch держит inFlight до собственного таймаута
+    // браузера — это минуты, за которые трек успевает кончиться, а приложение
+    // всё это время не делает ни одной проверки.
+    const result = await recognize(clip.blob, settings.token, {
+      signal: AbortSignal.timeout?.(REQUEST_TIMEOUT * 1000),
+    });
     requests++;
     el.counter.textContent = `${requests} ${plural(requests, 'запрос', 'запроса', 'запросов')}`;
-    if (result) handleMatch(result, s, clip.seconds);
+    if (result) handleMatch(result, s);
     else handleNoMatch(s);
   } catch (e) {
-    log('err', e instanceof AudDError ? `AudD: ${e.message}` : `Сеть: ${e.message}`);
+    log('err',
+      e instanceof AudDError ? `AudD: ${e.message}`
+      : e.name === 'TimeoutError' ? `AudD не ответил за ${REQUEST_TIMEOUT} с`
+      : `Сеть: ${e.message}`);
     showError(e instanceof AudDError && (e.code === 900 || e.code === 901) ? e.message : '');
-    if (s && s === session) s.nextCheckAt = capture.audioTime + 30;
+    if (s === session) s.nextCheckAt = capture.audioTime + 30;
   } finally {
     inFlight = false;
     refreshStatus();
   }
 }
 
-function handleMatch(result, s, clipSeconds) {
+function handleMatch(result, s) {
   const key = trackKey(result);
 
   if (s?.entry && s.entry.key === key) {
     log('ok', `всё ещё «${result.title}»`);
   } else {
     if (s?.entry) closeEntry(s.entry);
-    const entry = makeEntry(result, key);
+    const entry = makeEntry(result, key, s);
     if (s) s.entry = entry;
     current = entry;
     history.unshift(entry);
@@ -280,27 +320,15 @@ function handleMatch(result, s, clipSeconds) {
     log('ok', `${result.artist} — ${result.title}`);
   }
 
+  // Трек определён — до следующей паузы больше не спрашиваем.
   if (s && s === session) {
     s.attempts = 0;
-    s.nextCheckAt = settings.recheck ? capture.audioTime + nextCheckDelay(result, clipSeconds) : Infinity;
+    s.nextCheckAt = Infinity;
   }
 }
 
-/**
- * Когда следующий раз проверять смену трека. Если AudD вернул таймкод и
- * длительность — считаем, сколько песне осталось, и просыпаемся к её концу.
- * Это дешевле любого фиксированного интервала.
- */
-function nextCheckDelay(result, clipSeconds) {
-  const tc = timecodeSeconds(result);
-  const total = trackDuration(result);
-  const remaining = tc != null && total != null ? total - tc - clipSeconds : null;
-  const delay = remaining != null && remaining > 0 ? remaining + 6 : settings.recheckEvery;
-  return Math.min(400, Math.max(30, delay));
-}
-
 function handleNoMatch(s) {
-  if (!s || s !== session) return log('warn', 'совпадений нет');
+  if (s !== session) return log('warn', 'совпадений нет');
   const delay = RETRY_DELAYS[s.attempts];
   s.attempts++;
   if (delay == null) {
@@ -312,7 +340,10 @@ function handleNoMatch(s) {
   }
 }
 
-function makeEntry(result, key) {
+// Сессию берём параметром, а не из глобальной: пока запрос был в полёте,
+// музыка могла смолкнуть и endSession успел её занулить — тогда начало трека
+// в истории оказалось бы равно моменту распознавания, и длительность соврала бы.
+function makeEntry(result, key, s) {
   return {
     id: `${Date.now()}-${Math.round(performance.now())}`,
     key,
@@ -323,7 +354,7 @@ function makeEntry(result, key) {
     releaseDate: result.release_date || '',
     art: artworkUrl(result, 300),
     links: links(result),
-    startWall: session?.startedAtWall ?? Date.now(),
+    startWall: s?.startedAtWall ?? Date.now(),
     recognizedWall: Date.now(),
     endWall: null,
   };
@@ -407,8 +438,8 @@ function renderHistory() {
 }
 
 function render() {
-  if (!running) return;
-  requestAnimationFrame(render);
+  if (!running) { rafId = 0; return; }
+  rafId = requestAnimationFrame(render);
   if (document.hidden || !features || !detector) return;
 
   const pct = Math.round(features.score * 100);
@@ -421,9 +452,11 @@ function render() {
     node.style.background = features[name] > 0.6 ? 'var(--accent)' : 'var(--muted)';
   }
 
-  el.phase.textContent = session
-    ? (session.entry ? 'трек определён' : 'музыка играет, собираю фрагмент')
-    : 'жду музыку';
+  el.phase.textContent = features.warmingUp
+    ? 'меряю фон комнаты'
+    : session
+      ? (session.entry ? 'трек определён' : 'музыка играет, собираю фрагмент')
+      : 'жду музыку';
 
   el.readout.textContent =
     `уровень ${features.rmsDb.toFixed(0)} дБ · фон ${features.floorDb.toFixed(0)} дБ · ` +
@@ -467,9 +500,15 @@ function drawSpectrum() {
 /* ------------------------------------------------------------- энергосбережение */
 
 async function requestWakeLock() {
-  if (!('wakeLock' in navigator)) return;
-  try { wakeLock = await navigator.wakeLock.request('screen'); }
-  catch { /* батарея, политика браузера — не критично */ }
+  if (!('wakeLock' in navigator) || wakeLock) return;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    // Уходя в фон, браузер отпускает лок сам. Без этой подписки переменная
+    // осталась бы занята отпущенным сентинелом, проверка на пустоту больше
+    // никогда бы не прошла — и после первого же сворачивания экран гас бы
+    // по таймауту, а вместе с ним на телефоне умирает и захват звука.
+    wakeLock.addEventListener('release', () => { wakeLock = null; });
+  } catch { /* батарея, политика браузера — не критично */ }
 }
 function releaseWakeLock() {
   wakeLock?.release().catch(() => {});
@@ -477,8 +516,12 @@ function releaseWakeLock() {
 }
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && running) {
-    if (!wakeLock) requestWakeLock();
-    requestAnimationFrame(render);
+    requestWakeLock();
+    // rAF в скрытой вкладке не отменяется, а откладывается: отложенный колбэк
+    // сработает при возврате. Планировать ещё один, не сняв прежний, — значит
+    // завести второй параллельный цикл отрисовки, и так на каждое сворачивание.
+    cancelAnimationFrame(rafId);
+    rafId = requestAnimationFrame(render);
   }
 });
 
@@ -517,15 +560,6 @@ function initSettings() {
   bindRange('setMinMusic', 'minMusic', (v) => `${v} с`);
   bindRange('setClip', 'clip', (v) => `${v} с`);
   bindRange('setSilence', 'silence', (v) => `${v} с`, applyGate);
-  bindRange('setRecheckEvery', 'recheckEvery', (v) => `${v} с`);
-
-  const recheck = $('setRecheck');
-  recheck.checked = settings.recheck;
-  recheck.addEventListener('change', () => {
-    settings.recheck = recheck.checked;
-    saveSettings();
-    if (session && !settings.recheck) session.nextCheckAt = Infinity;
-  });
 
   $('resetSettingsBtn').addEventListener('click', () => {
     settings = { ...DEFAULTS, token: settings.token }; // ключ сбрасывать не за что
@@ -537,12 +571,6 @@ function initSettings() {
 /* --------------------------------------------------------------------- запуск */
 
 el.toggle.addEventListener('click', () => (running ? stop() : start()));
-el.manual.addEventListener('click', () => runRecognition('manual'));
-el.source.addEventListener('change', () => {
-  $('sourceHint').textContent = el.source.value === 'display'
-    ? 'Браузер спросит, чем поделиться. Выберите вкладку и обязательно включите «Поделиться аудио вкладки» — без галочки звука не будет.'
-    : 'Микрофон ловит музыку из колонок вокруг. Для звука из вкладки выберите второй режим и не забудьте галочку «Поделиться аудио вкладки».';
-});
 el.clearHistory.addEventListener('click', () => {
   history = [];
   current = null;

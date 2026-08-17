@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Распознавание музыки</title>
-<meta name="description" content="Слушает микрофон или звук вкладки, сам замечает начало трека и распознаёт его через AudD.">
+<meta name="description" content="Слушает микрофон, сам замечает начало трека и распознаёт его через AudD.">
 <meta name="theme-color" content="#0b0d12">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
 <link rel="stylesheet" href="./style.css">
@@ -26,21 +26,11 @@
   <!-- Управление -->
   <section class="card control">
     <div class="control-row">
-      <label class="field">
-        <span class="field-label">Источник звука</span>
-        <select id="sourceSelect">
-          <option value="mic">Микрофон — музыка в комнате</option>
-          <option value="display">Звук вкладки или экрана</option>
-        </select>
-      </label>
       <button class="btn btn--primary" id="toggleBtn">Начать слушать</button>
-      <button class="btn" id="manualBtn" disabled title="Отправить последние секунды прямо сейчас">
-        Распознать сейчас
-      </button>
     </div>
-    <p class="hint" id="sourceHint">
-      Микрофон ловит музыку из колонок вокруг. Для звука из вкладки выберите второй режим
-      и не забудьте галочку «Поделиться аудио вкладки».
+    <p class="hint">
+      Слушает микрофон и сам замечает, что заиграла музыка. Держите устройство
+      так, чтобы колонки было слышно, — громкость важнее близости.
     </p>
     <p class="notice" id="tokenNotice" hidden>
       Нужен свой ключ AudD — заведите его на
@@ -127,7 +117,9 @@
       <label class="field">
         <span class="field-label">Играет подряд до первой отправки — <b id="setMinMusicVal"></b></span>
         <input type="range" id="setMinMusic" min="4" max="40" step="1">
-        <small>Защита от случайных звуков: короткий всплеск запрос не потратит.</small>
+        <small>Защита от случайных звуков: короткий всплеск запрос не потратит.
+          Раньше, чем фрагмент наберётся одной музыкой (длина фрагмента + 3 секунды
+          на интро), отправки всё равно не будет.</small>
       </label>
 
       <label class="field">
@@ -140,18 +132,6 @@
         <span class="field-label">Тишина = трек закончился — <b id="setSilenceVal"></b></span>
         <input type="range" id="setSilence" min="2" max="20" step="1">
         <small>Пауза короче этой считается частью того же трека.</small>
-      </label>
-
-      <label class="field field--check">
-        <input type="checkbox" id="setRecheck">
-        <span>Проверять смену трека, пока музыка не смолкает</span>
-        <small>Для радио и плейлистов без пауз. Момент следующей проверки считается
-          из длительности и таймкода текущего трека, поэтому лишних запросов почти нет.</small>
-      </label>
-
-      <label class="field">
-        <span class="field-label">Если длительность неизвестна, проверять раз в <b id="setRecheckEveryVal"></b></span>
-        <input type="range" id="setRecheckEvery" min="30" max="300" step="10">
       </label>
     </div>
     <button class="btn btn--ghost btn--sm" id="resetSettingsBtn">Вернуть значения по умолчанию</button>
