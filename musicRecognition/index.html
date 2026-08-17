@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Распознавание музыки</title>
+<meta name="description" content="Слушает микрофон или звук вкладки, сам замечает начало трека и распознаёт его через AudD.">
+<meta name="theme-color" content="#0b0d12">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <h1>Распознавание музыки</h1>
+  </div>
+  <div class="topbar-right">
+    <span class="counter" id="requestCounter" title="Запросов к AudD за сессию">0 запросов</span>
+    <span class="pill pill--idle" id="statusPill">Остановлено</span>
+  </div>
+</header>
+
+<main>
+  <!-- Управление -->
+  <section class="card control">
+    <div class="control-row">
+      <label class="field">
+        <span class="field-label">Источник звука</span>
+        <select id="sourceSelect">
+          <option value="mic">Микрофон — музыка в комнате</option>
+          <option value="display">Звук вкладки или экрана</option>
+        </select>
+      </label>
+      <button class="btn btn--primary" id="toggleBtn">Начать слушать</button>
+      <button class="btn" id="manualBtn" disabled title="Отправить последние секунды прямо сейчас">
+        Распознать сейчас
+      </button>
+    </div>
+    <p class="hint" id="sourceHint">
+      Микрофон ловит музыку из колонок вокруг. Для звука из вкладки выберите второй режим
+      и не забудьте галочку «Поделиться аудио вкладки».
+    </p>
+    <p class="notice" id="tokenNotice" hidden>
+      Нужен свой ключ AudD — заведите его на
+      <a href="https://dashboard.audd.io/" target="_blank" rel="noopener">dashboard.audd.io</a>
+      и вставьте в «Настройки» ниже. Ключ сохранится в этом браузере и никуда не отправляется,
+      кроме самого api.audd.io.
+    </p>
+    <p class="error" id="errorBox" hidden></p>
+  </section>
+
+  <!-- Живой монитор -->
+  <section class="card monitor" id="monitor" hidden>
+    <div class="monitor-head">
+      <h2>Что слышно сейчас</h2>
+      <span class="phase" id="phaseLabel">тишина</span>
+    </div>
+
+    <canvas id="spectrum" height="90" aria-label="Спектр входящего звука"></canvas>
+
+    <div class="gauge">
+      <div class="gauge-track">
+        <div class="gauge-fill" id="scoreFill"></div>
+        <div class="gauge-mark" id="scoreMark" title="Порог срабатывания"></div>
+      </div>
+      <div class="gauge-meta">
+        <span>Похоже на музыку</span>
+        <b id="scoreValue">0%</b>
+      </div>
+    </div>
+
+    <div class="factors">
+      <div class="factor"><span>Громкость</span><i><u id="fLevel"></u></i></div>
+      <div class="factor"><span>Тональность</span><i><u id="fTone"></u></i></div>
+      <div class="factor"><span>Бас</span><i><u id="fBass"></u></i></div>
+      <div class="factor"><span>Непрерывность</span><i><u id="fFlow"></u></i></div>
+    </div>
+
+    <p class="readout" id="readout"></p>
+  </section>
+
+  <!-- Сейчас играет -->
+  <section class="card now" id="nowCard" hidden>
+    <div class="now-art">
+      <img id="nowArt" alt="" hidden>
+      <div class="now-art-empty" id="nowArtEmpty">♪</div>
+    </div>
+    <div class="now-body">
+      <span class="now-kicker" id="nowKicker">Сейчас играет</span>
+      <h2 id="nowTitle">—</h2>
+      <p class="now-artist" id="nowArtist"></p>
+      <p class="now-meta" id="nowMeta"></p>
+      <div class="now-links" id="nowLinks"></div>
+    </div>
+  </section>
+
+  <!-- История -->
+  <section class="card history">
+    <div class="history-head">
+      <h2>История</h2>
+      <button class="btn btn--ghost btn--sm" id="clearHistoryBtn">Очистить</button>
+    </div>
+    <ol class="history-list" id="historyList"></ol>
+    <p class="empty" id="historyEmpty">Пока ничего не распознано.</p>
+  </section>
+
+  <!-- Настройки -->
+  <details class="card settings">
+    <summary>Настройки</summary>
+    <div class="settings-grid">
+      <label class="field">
+        <span class="field-label">API-ключ AudD</span>
+        <input type="text" id="setToken" spellcheck="false" autocomplete="off"
+               placeholder="вставьте ключ с dashboard.audd.io">
+        <small>Хранится только в localStorage этого браузера — на каждом устройстве
+          вводится отдельно.</small>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Порог «это музыка» — <b id="setThresholdVal"></b></span>
+        <input type="range" id="setThreshold" min="0.2" max="0.9" step="0.01">
+        <small>Ниже — срабатывает чаще и ошибается на шуме. Выше — пропускает тихую музыку.</small>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Играет подряд до первой отправки — <b id="setMinMusicVal"></b></span>
+        <input type="range" id="setMinMusic" min="4" max="40" step="1">
+        <small>Защита от случайных звуков: короткий всплеск запрос не потратит.</small>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Длина отправляемого фрагмента — <b id="setClipVal"></b></span>
+        <input type="range" id="setClip" min="6" max="25" step="1">
+        <small>AudD хватает 10–15 секунд. Больше — дольше и тяжелее, точнее не станет.</small>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Тишина = трек закончился — <b id="setSilenceVal"></b></span>
+        <input type="range" id="setSilence" min="2" max="20" step="1">
+        <small>Пауза короче этой считается частью того же трека.</small>
+      </label>
+
+      <label class="field field--check">
+        <input type="checkbox" id="setRecheck">
+        <span>Проверять смену трека, пока музыка не смолкает</span>
+        <small>Для радио и плейлистов без пауз. Момент следующей проверки считается
+          из длительности и таймкода текущего трека, поэтому лишних запросов почти нет.</small>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Если длительность неизвестна, проверять раз в <b id="setRecheckEveryVal"></b></span>
+        <input type="range" id="setRecheckEvery" min="30" max="300" step="10">
+      </label>
+    </div>
+    <button class="btn btn--ghost btn--sm" id="resetSettingsBtn">Вернуть значения по умолчанию</button>
+  </details>
+
+  <!-- Журнал -->
+  <details class="card log">
+    <summary>Журнал событий</summary>
+    <ul class="log-list" id="logList"></ul>
+  </details>
+</main>
+
+<script type="module" src="./js/app.js"></script>
+</body>
+</html>
