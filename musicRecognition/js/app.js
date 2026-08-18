@@ -2,24 +2,44 @@ import { AudioCapture } from './audio.js';
 import { MusicDetector, MusicGate } from './detector.js';
 import { recognize, trackKey, artworkUrl, links, AudDError } from './audd.js';
 
+// Приложение рассчитано на короткий трек-вопрос: 10–20 секунд музыки, потом
+// пауза на ответ, потом следующий вопрос. Отсюда все значения ниже — фрагмент
+// обязан целиком уместиться внутри самого короткого трека, иначе в отпечаток
+// попадёт пауза и начало следующего.
 const DEFAULTS = {
+  v: 2,              // версия набора настроек, см. loadSettings
   token: '',         // пользователь вводит свой; хранится только в localStorage
-  threshold: 0.35,  // середина коридора между тишиной и музыкой по замерам
-  minMusic: 10,      // сколько музыки должно прозвучать, чтобы поверить (не меньше clip + LEAD_IN)
-  clip: 12,          // длина фрагмента для AudD
-  silence: 5,        // тишина, после которой трек считается законченным
+  threshold: 0.35,   // середина коридора между тишиной и музыкой по замерам
+  // Отправка приходит на (clip + LEAD_IN) секунде. На треке в 10 секунд это
+  // 9-я — то есть секунда запаса на то, что начало музыки замечено не мгновенно:
+  // оценка сглажена, и момент пересечения порога отстаёт от реального начала
+  // на треть секунды с небольшим. Длиннее фрагмент брать нечем.
+  clip: 8,
+  // Строго короче паузы между вопросами, и это самая важная настройка здесь.
+  // Условие размыкания гейта — `>= releaseSec`, поэтому равенство проигрывает
+  // гонку следующему треку: при пороге 3 с и паузе 3 с раунд из шести вопросов
+  // склеивается в одну сессию и уходит один запрос вместо шести.
+  silence: 2,
   attack: 2.5,       // подтверждение начала музыки
 };
 
-// Первые такты трека — худший материал для отпечатка: интро разрежено (мало
-// спектральных пиков → мало хешей), часто это одинокий инструмент или нарастание
-// из тишины, да и плеер успевает добавить своё плавное включение. Поэтому первый
-// фрагмент берём не от самого начала, а отступив немного вглубь трека.
-const LEAD_IN = 3;
+// Первые такты — худший материал для отпечатка: интро разрежено (мало
+// спектральных пиков → мало хешей), да и плеер успевает добавить своё плавное
+// включение. Раньше отступ был 3 секунды, но на десятисекундном треке это треть
+// всего, что у нас есть. Секунда снимает щелчок включения и на этом всё.
+const LEAD_IN = 1;
 
-// Если совпадений нет — пробуем ещё несколько раз: начало могло попасть
-// на интро или на разговор диджея.
-const RETRY_DELAYS = [12, 22, 40];
+// Повторов «не узнали» больше нет. Внутри трека длиной 10–20 секунд второго
+// фрагмента просто нет: отправка идёт на 9-й секунде, и любой следующий кусок
+// либо почти целиком повторяет первый, либо уже захватывает паузу на ответ и
+// начало следующего вопроса. Замер на раунде 6×(15 с музыки + 5 с ответа):
+// лестница 12/22/40 давала 4 запроса на весь раунд, из них один смешанный,
+// и три трека из шести не отправлялись вовсе.
+//
+// Сорвавшийся запрос — другое дело: ответа не было вообще, и повторить его
+// стоит, пока трек ещё звучит. Отсюда один короткий повтор.
+const ERROR_RETRY_SEC = 3;
+const ERROR_RETRIES = 1;
 const REQUEST_TIMEOUT = 30;
 const BUFFER_SECONDS = 30;
 const HISTORY_LIMIT = 100;
@@ -61,8 +81,15 @@ const spectrumBars = new Float32Array(72);
 /* ------------------------------------------------------------------ хранилище */
 
 function loadSettings() {
-  try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(LS_SETTINGS) || '{}') }; }
-  catch { return { ...DEFAULTS }; }
+  try {
+    const saved = JSON.parse(localStorage.getItem(LS_SETTINGS) || '{}');
+    // Длина фрагмента и порог паузы сменили смысл — они подобраны под короткий
+    // трек-вопрос. Сохранённые с прошлой версии значения перебили бы новые
+    // умолчания, и на своём же устройстве было бы не понять, почему ничего не
+    // изменилось. Ключ при этом терять не за что.
+    if (saved.v !== DEFAULTS.v) return { ...DEFAULTS, token: saved.token || '' };
+    return { ...DEFAULTS, ...saved };
+  } catch { return { ...DEFAULTS }; }
 }
 function saveSettings() {
   try { localStorage.setItem(LS_SETTINGS, JSON.stringify(settings)); } catch { /* приватный режим */ }
@@ -244,11 +271,12 @@ function startSession() {
   session = {
     startedAt: gate.startedAt,
     startedAtWall: Date.now(),
-    attempts: 0,
-    // Ждём не меньше, чем нужно, чтобы фрагмент целиком набрался музыкой уже
-    // после интро. Иначе в AudD уходит начало трека вперемешку с комнатой —
-    // ровно тот случай, когда первый запрос молчит, а повтор находит.
-    nextCheckAt: gate.startedAt + Math.max(settings.minMusic, settings.clip + LEAD_IN),
+    errors: 0,
+    // Единственная отправка за сессию, и она приходит ровно в тот момент, когда
+    // фрагмент целиком набрался музыкой после отступа. Ждать дольше нечего:
+    // добавочные секунды в отпечаток уже не попадут, а риск, что трек кончится
+    // и в буфер начнёт заходить пауза, растёт с каждой.
+    nextCheckAt: gate.startedAt + settings.clip + LEAD_IN,
     entry: null,
   };
   document.body.classList.add('is-music');
@@ -307,8 +335,19 @@ async function runRecognition() {
       e instanceof AudDError ? `AudD: ${e.message}`
       : e.name === 'TimeoutError' ? `AudD не ответил за ${REQUEST_TIMEOUT} с`
       : `Сеть: ${e.message}`);
-    showError(e instanceof AudDError && (e.code === 900 || e.code === 901) ? e.message : '');
-    if (s === session) s.nextCheckAt = capture.audioTime + 30;
+    // Неверный ключ и исчерпанный лимит сами не рассосутся — повторять их
+    // значит просто выкидывать клипы в пустоту до конца раунда.
+    const fatal = e instanceof AudDError && (e.code === 900 || e.code === 901);
+    showError(fatal ? e.message : '');
+    if (s === session) {
+      if (!fatal && s.errors < ERROR_RETRIES) {
+        s.errors++;
+        s.nextCheckAt = capture.audioTime + ERROR_RETRY_SEC;
+        log('warn', `повтор через ${ERROR_RETRY_SEC} с`);
+      } else {
+        s.nextCheckAt = Infinity;
+      }
+    }
   } finally {
     inFlight = false;
     refreshStatus();
@@ -334,23 +373,12 @@ function handleMatch(result, s) {
   }
 
   // Трек определён — до следующей паузы больше не спрашиваем.
-  if (s && s === session) {
-    s.attempts = 0;
-    s.nextCheckAt = Infinity;
-  }
+  if (s && s === session) s.nextCheckAt = Infinity;
 }
 
 function handleNoMatch(s) {
-  if (s !== session) return log('warn', 'совпадений нет');
-  const delay = RETRY_DELAYS[s.attempts];
-  s.attempts++;
-  if (delay == null) {
-    s.nextCheckAt = Infinity;
-    log('warn', 'совпадений нет, больше не пробую до следующего трека');
-  } else {
-    s.nextCheckAt = capture.audioTime + delay;
-    log('warn', `совпадений нет, повтор через ${delay} с`);
-  }
+  log('warn', 'совпадений нет');
+  if (s === session) s.nextCheckAt = Infinity;
 }
 
 // Сессию берём параметром, а не из глобальной: пока запрос был в полёте,
@@ -559,6 +587,17 @@ function applyGate() {
   gate?.configure({ threshold: settings.threshold, releaseSec: settings.silence });
 }
 
+// Длина фрагмента задаёт и момент отправки, и минимальную длину трека, который
+// вообще может быть распознан. Из подписи «8 с» не следует ни то, ни другое,
+// поэтому последствие считается и показывается прямо под ползунком.
+function refreshClipHint() {
+  const at = settings.clip + LEAD_IN;
+  $('setClipHint').textContent =
+    `Отправка на ${at}-й секунде трека, фрагмент с ${LEAD_IN}-й по ${at}-ю. ` +
+    `Если трек короче ${at} с, в отпечаток попадёт пауза после него. ` +
+    `AudD увереннее всего работает от 10 с — но столько есть не на каждом треке.`;
+}
+
 function initSettings() {
   const token = $('setToken');
   token.value = settings.token;
@@ -571,9 +610,9 @@ function initSettings() {
   });
 
   bindRange('setThreshold', 'threshold', (v) => `${Math.round(v * 100)}%`, applyGate);
-  bindRange('setMinMusic', 'minMusic', (v) => `${v} с`);
-  bindRange('setClip', 'clip', (v) => `${v} с`);
+  bindRange('setClip', 'clip', (v) => `${v} с`, refreshClipHint);
   bindRange('setSilence', 'silence', (v) => `${v} с`, applyGate);
+  refreshClipHint();
 
   $('resetSettingsBtn').addEventListener('click', () => {
     settings = { ...DEFAULTS, token: settings.token }; // ключ сбрасывать не за что

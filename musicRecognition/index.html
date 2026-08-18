@@ -116,23 +116,17 @@
       </label>
 
       <label class="field">
-        <span class="field-label">Играет подряд до первой отправки — <b id="setMinMusicVal"></b></span>
-        <input type="range" id="setMinMusic" min="4" max="40" step="1">
-        <small>Защита от случайных звуков: короткий всплеск запрос не потратит.
-          Раньше, чем фрагмент наберётся одной музыкой (длина фрагмента + 3 секунды
-          на интро), отправки всё равно не будет.</small>
+        <span class="field-label">Длина фрагмента — <b id="setClipVal"></b></span>
+        <input type="range" id="setClip" min="5" max="15" step="1">
+        <small id="setClipHint"></small>
       </label>
 
       <label class="field">
-        <span class="field-label">Длина отправляемого фрагмента — <b id="setClipVal"></b></span>
-        <input type="range" id="setClip" min="6" max="25" step="1">
-        <small>AudD хватает 10–15 секунд. Больше — дольше и тяжелее, точнее не станет.</small>
-      </label>
-
-      <label class="field">
-        <span class="field-label">Тишина = трек закончился — <b id="setSilenceVal"></b></span>
-        <input type="range" id="setSilence" min="2" max="20" step="1">
-        <small>Пауза короче этой считается частью того же трека.</small>
+        <span class="field-label">Пауза = трек закончился — <b id="setSilenceVal"></b></span>
+        <input type="range" id="setSilence" min="1" max="10" step="1">
+        <small>Должна быть короче паузы между вопросами. Если длиннее, весь раунд
+          склеится в один трек: запрос уйдёт по первому вопросу, а остальные
+          приложение уже не заметит.</small>
       </label>
     </div>
     <button class="btn btn--ghost btn--sm" id="resetSettingsBtn">Вернуть значения по умолчанию</button>
