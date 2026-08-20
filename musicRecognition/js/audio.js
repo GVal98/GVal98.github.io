@@ -105,7 +105,7 @@ function polyphaseBank(cutoffRatio, half) {
 }
 
 /**
- * Даунсэмплинг с ФНЧ и дробной задержкой.
+ * Пересчёт частоты с ФНЧ и дробной задержкой — в обе стороны.
  *
  * Две ловушки, обе замерены на тонах:
  *
@@ -120,17 +120,21 @@ function polyphaseBank(cutoffRatio, half) {
  *    и на 5 кГц спуры вылезали на −13 дБ от несущей. Отсюда банк дробных сдвигов.
  */
 export function resample(input, inRate, outRate) {
-  if (inRate <= outRate) return input;
+  if (inRate === outRate) return input;
   const ratio = inRate / outRate;
+  // При повышении частоты прореживать нечего: ядро давит не заворот, а образы
+  // выше входного Найквиста, и срез остаётся привязанным к входу. Отсюда
+  // Math.max(1, ratio) в обеих формулах — на upsampling обе дают ветку «ratio 1».
+  const decim = Math.max(1, ratio);
   // Переходная полоса окна Хэмминга — около 3.3/taps от входной частоты. При
   // фиксированной длине ядра и большом ratio она шире, чем расстояние до зоны
   // заворота, и фильтр до неё просто не дотягивается (на 96 кГц алиас давился
   // всего на −21 дБ). Держим полосу пропорциональной прореживанию.
-  const half = Math.max(8, Math.round((FIR_HALF_AT_3X * ratio) / 3));
+  const half = Math.max(8, Math.round((FIR_HALF_AT_3X * decim) / 3));
   const taps = half * 2 + 1;
   // Срез с запасом ниже выходного Найквиста: у фильтра конечной длины спад
   // не отвесный, и посадить край ровно на 8 кГц значит пропустить его половину.
-  const bank = polyphaseBank(0.45 / ratio, half);
+  const bank = polyphaseBank(0.45 / decim, half);
 
   const outLen = Math.floor(input.length / ratio);
   const out = new Float32Array(outLen);
@@ -180,9 +184,27 @@ export function encodeWav(samples, sampleRate) {
   return new Blob([view.buffer], { type: 'audio/wav' });
 }
 
-// Частота, в которую сводим клип перед отправкой. Акустические отпечатки
-// живут ниже 5 кГц, так что 16 кГц моно — с запасом, а вес втрое меньше.
-export const CLIP_SAMPLE_RATE = 16000;
+// Частота, в которую сводим клип перед отправкой.
+//
+// Полоса отпечатка и правда лежит ниже 5 кГц, но решает не она, а то, как AudD
+// разбирает присланный файл. Один и тот же клип с микрофона (−26 dBFS RMS,
+// 10 с) на 16 кГц не опознаётся, а на 8, 22.05, 32, 44.1 и 48 кГц — опознаётся;
+// каждая точка проверена запросом к API, провал на 16 кГц воспроизводится. Тот
+// же клип, поднятый с 16 кГц обратно до 44.1, опознаётся снова — значит дело не
+// в потерянной полосе, а именно в частоте заголовка. Студийная запись 16 кГц
+// переживает: запас по SNR у неё есть, у микрофонной — нет.
+//
+// Поэтому клип уходит на своей частоте, и трогаем её только на краях.
+const CLIP_MAX_RATE = 48000;  // выше не проверяли — не поднимаем туда вслепую
+const BAD_RATE = 16000;       // ровно её отдаёт Bluetooth-гарнитура в mSBC
+const SAFE_RATE = 44100;      // куда уводим с провальной
+
+/** Частота, на которой отправляем клип, снятый контекстом на ctxRate. */
+export function clipRate(ctxRate) {
+  if (ctxRate > CLIP_MAX_RATE) return CLIP_MAX_RATE;
+  if (ctxRate === BAD_RATE) return SAFE_RATE;
+  return ctxRate;
+}
 
 export class AudioCapture {
   /**
@@ -293,12 +315,11 @@ export class AudioCapture {
     const want = Math.ceil(seconds * this.ctx.sampleRate);
     const raw = this.ring.readLast(want);
     if (raw.length < this.ctx.sampleRate) return null; // меньше секунды — бессмысленно
-    // Контекст бывает и ниже 16 кГц: Bluetooth-гарнитура в профиле HFP даёт 8000.
-    // resample такой вход отдаёт как есть, так что в заголовок нужна настоящая
-    // частота — иначе клип воспроизводится вдвое быстрее и AudD не найдёт ничего.
-    const rate = Math.min(this.ctx.sampleRate, CLIP_SAMPLE_RATE);
-    const down = resample(raw, this.ctx.sampleRate, rate);
-    return { blob: encodeWav(down, rate), seconds: raw.length / this.ctx.sampleRate };
+    // В заголовок идёт та частота, в которой клип реально лежит, — иначе он
+    // воспроизводится не на своей скорости и AudD не найдёт ничего.
+    const rate = clipRate(this.ctx.sampleRate);
+    const pcm = resample(raw, this.ctx.sampleRate, rate);
+    return { blob: encodeWav(pcm, rate), seconds: raw.length / this.ctx.sampleRate };
   }
 
   async stop() {
