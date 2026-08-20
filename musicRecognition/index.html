@@ -137,8 +137,17 @@
           Каждый переспрос — ещё один запрос к AudD, даже если играет всё тот же трек.
           0 — не переспрашивать.</small>
       </label>
+
+      <label class="field">
+        <span class="field-label">Вибрация имени исполнителя — <b id="setMorseVal"></b></span>
+        <input type="range" id="setMorse" min="0" max="200" step="40">
+        <small id="setMorseHint"></small>
+      </label>
     </div>
-    <button class="btn btn--ghost btn--sm" id="resetSettingsBtn">Вернуть значения по умолчанию</button>
+    <div class="settings-actions">
+      <button class="btn btn--ghost btn--sm" id="resetSettingsBtn">Вернуть значения по умолчанию</button>
+      <button class="btn btn--ghost btn--sm" id="testMorseBtn">Проверить вибрацию</button>
+    </div>
   </details>
 
   <!-- Журнал -->

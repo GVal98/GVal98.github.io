@@ -319,6 +319,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   margin: 18px 0;
 }
 .settings-grid .field-label b { color: var(--text); font-variant-numeric: tabular-nums; }
+.settings-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 
 .log-list {
   list-style: none;

@@ -1,6 +1,7 @@
 import { AudioCapture } from './audio.js';
 import { MusicDetector, MusicGate } from './detector.js';
 import { recognize, trackKey, artworkUrl, links, AudDError } from './audd.js';
+import * as morse from './morse.js';
 
 // Приложение рассчитано на короткий трек-вопрос: 10–20 секунд музыки, потом
 // пауза на ответ, потом следующий вопрос. Отсюда все значения ниже — фрагмент
@@ -26,6 +27,11 @@ const DEFAULTS = {
   // сессии, ни разрыва внутри неё не наступает, и заметить смену вопроса
   // больше нечем: остаются только часы.
   recheck: 20,
+  // Длина точки в вибрации имени исполнителя, 0 — не вибрировать. Мотор
+  // телефона раскручивается и тормозит десятки миллисекунд, и на короткой
+  // единице точка с тире сливаются в невнятный гул: 120 мс — низ того, что
+  // ещё различается на ощупь, и при этом пять букв укладываются в 4–7 секунд.
+  morse: 120,
 };
 
 // Первые такты — худший материал для отпечатка: интро разрежено (мало
@@ -259,6 +265,10 @@ async function stop() {
   el.phase.textContent = 'остановлено';
   refreshStatus();
   releaseWakeLock();
+  // Нажали «Остановить» посреди морзянки — дослушивать её незачем, распознавание
+  // уже выключено. Тем более при уходе со страницы: там шаблон пережил бы саму
+  // вкладку и телефон продолжил бы стучать в пустоту.
+  stopBuzz();
 }
 
 /* --------------------------------------------------- кадр анализа и состояния */
@@ -442,6 +452,8 @@ function handleMatch(result, req) {
     renderHistory();
     renderNow(true);
     log('ok', `${result.artist} — ${result.title}`);
+    buzzArtist(entry.artist);
+    refreshMorseHint(); // в подсказке настроек разбирается последнее имя, а не «Queen»
   }
 
   if (req.live()) {
@@ -483,6 +495,52 @@ function makeEntry(result, key, req) {
     recognizedWall: Date.now(),
     endWall: null,
   };
+}
+
+/* -------------------------------------------------------------------- морзе */
+
+// Ответ приходит ровно тогда, когда смотреть на экран нельзя: вопрос ещё идёт,
+// телефон лежит экраном вниз или в кармане. Имя исполнителя стучится морзянкой,
+// и ответ узнаётся, не доставая телефон.
+//
+// Мотор слышно микрофоном, но вредить этим нечему: фрагмент к этому моменту уже
+// отправлен, а детектор дребезг корпуса за музыку не примет — он широкополосный,
+// плоскостность у него выше flatnessVeto, и оценка от него гасится, а не растёт.
+let vibrationWarned = false;
+
+function buzzArtist(artist) {
+  if (!settings.morse) return;
+  if (typeof navigator.vibrate !== 'function') {
+    // Один раз за сессию: телефон от этого вибрировать не начнёт, а журнал
+    // забился бы одинаковыми строками на каждый трек.
+    if (!vibrationWarned) {
+      vibrationWarned = true;
+      log('warn', 'браузер не умеет вибрацию — на iPhone её нет вовсе');
+    }
+    return;
+  }
+
+  const letters = morse.spell(artist);
+  if (!letters.length) {
+    log('', artist ? `«${artist}» нечем отстучать` : 'исполнитель неизвестен, вибрации не будет');
+    return;
+  }
+
+  // Вибрация в скрытой вкладке отбрасывается — это не наша ошибка, но и не
+  // «всё сработало»: без строки в журнале молчащий телефон не объяснить.
+  const sent = navigator.vibrate(morse.pattern(letters, settings.morse));
+  log('', `вибрация ${morse.word(letters)} · ${morse.dashes(letters)}` + (sent ? '' : ' — браузер не пропустил'));
+}
+
+function stopBuzz() {
+  navigator.vibrate?.(0);
+}
+
+// На чём показывать и проверять вибрацию. Имя, которое только что играло,
+// на ощупь разбирается вернее выдуманного — его уже знаешь, и остаётся понять
+// не «что это», а «те ли это буквы». Своей истории нет — берём образец.
+function buzzSample() {
+  return current?.artist || history[0]?.artist || 'Queen';
 }
 
 function plural(n, one, few, many) {
@@ -682,6 +740,29 @@ function refreshClipHint() {
     `AudD увереннее всего работает от 10 с — но столько есть не на каждом треке.`;
 }
 
+// Из подписи «120 мс» не следует ни сколько это тянется, ни что именно
+// почувствует рука, — считаем и то и другое на живом имени: на последнем
+// распознанном, пока его нет — на «Queen».
+function refreshMorseHint() {
+  const test = $('testMorseBtn');
+  test.disabled = !settings.morse;
+  if (!settings.morse) {
+    $('setMorseHint').textContent = 'Телефон молчит: ответ видно только на экране.';
+    stopBuzz(); // выключили посреди морзянки — она не должна доиграть
+    return;
+  }
+  const sample = buzzSample();
+  const letters = morse.spell(sample);
+  const shown = letters.length
+    ? `«${morse.word(letters)}» → ${morse.dashes(letters)}, это ${(morse.totalMs(letters, settings.morse) / 1000).toFixed(1)} с. `
+    : '';
+  $('setMorseHint').textContent =
+    `Первые ${morse.MAX_CHARS} букв имени: точка ${settings.morse} мс, тире ${settings.morse * 3} мс. ${shown}` +
+    `Только латиница: кириллица транслитерируется, цифра идёт первой буквой английского счёта (2 → T), ` +
+    `пробелы и знаки выбрасываются. ` +
+    `Вкладка при этом должна быть открыта на экране: вибрацию из фона не пропускает ни один браузер, а iPhone не умеет её вовсе.`;
+}
+
 function initSettings() {
   const token = $('setToken');
   token.value = settings.token;
@@ -702,7 +783,14 @@ function initSettings() {
   bindRange('setRecheck', 'recheck', (v) => (v ? `каждые ${v} с` : 'не переспрашивать'), () => {
     if (session && (session.solved || !Number.isFinite(session.nextCheckAt))) scheduleRecheck(session);
   });
+  bindRange('setMorse', 'morse', (v) => (v ? `точка ${v} мс` : 'выключена'), refreshMorseHint);
   refreshClipHint();
+  refreshMorseHint();
+
+  // Единственный способ узнать, доходит ли вибрация до этого телефона, — не
+  // дожидаться трека. Стучит то же, что придёт на распознавание, и на том же
+  // имени, что показано в подсказке.
+  $('testMorseBtn').addEventListener('click', () => buzzArtist(buzzSample()));
 
   $('resetSettingsBtn').addEventListener('click', () => {
     settings = { ...DEFAULTS, token: settings.token }; // ключ сбрасывать не за что
