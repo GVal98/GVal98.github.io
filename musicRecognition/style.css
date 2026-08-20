@@ -320,6 +320,14 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 }
 .settings-grid .field-label b { color: var(--text); font-variant-numeric: tabular-nums; }
 .settings-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.settings-head {
+  margin: 22px 0 0;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text);
+}
+.settings-head:first-of-type { margin-top: 6px; }
+.settings-head + .settings-grid { margin-top: 14px; }
 .field-check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .field-check input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
 .field-check input:disabled { cursor: default; }

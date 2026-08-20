@@ -100,6 +100,8 @@
   <!-- Настройки -->
   <details class="card settings">
     <summary>Настройки</summary>
+
+    <h3 class="settings-head">Распознавание</h3>
     <div class="settings-grid">
       <label class="field">
         <span class="field-label">API-ключ AudD</span>
@@ -137,11 +139,39 @@
           Каждый переспрос — ещё один запрос к AudD, даже если играет всё тот же трек.
           0 — не переспрашивать.</small>
       </label>
+    </div>
+
+    <h3 class="settings-head">Вибрация ответа</h3>
+    <div class="settings-grid">
+      <label class="field">
+        <span class="field-label">Длина точки — <b id="setMorseVal"></b></span>
+        <input type="range" id="setMorse" min="0" max="240" step="10">
+        <small id="setMorseHint"></small>
+      </label>
 
       <label class="field">
-        <span class="field-label">Вибрация имени исполнителя — <b id="setMorseVal"></b></span>
-        <input type="range" id="setMorse" min="0" max="200" step="40">
-        <small id="setMorseHint"></small>
+        <span class="field-label">Букв имени — <b id="setMorseLettersVal"></b></span>
+        <input type="range" id="setMorseLetters" min="2" max="8" step="1">
+        <small id="setMorseLettersHint"></small>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Тире — <b id="setMorseDashVal"></b></span>
+        <input type="range" id="setMorseDash" min="2" max="6" step="1">
+        <small>В точках. В самой азбуке тире равно трём точкам; короче двух оно
+          на ощупь не отличается от точки.</small>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Пауза внутри буквы — <b id="setMorseGapSymVal"></b></span>
+        <input type="range" id="setMorseGapSym" min="1" max="8" step="1">
+        <small id="setMorseGapSymHint"></small>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Пауза между буквами — <b id="setMorseGapLetterVal"></b></span>
+        <input type="range" id="setMorseGapLetter" min="2" max="20" step="1">
+        <small id="setMorseGapLetterHint"></small>
       </label>
 
       <div class="field">
@@ -151,6 +181,12 @@
         </label>
         <small id="setMorseTwiceHint"></small>
       </div>
+
+      <label class="field">
+        <span class="field-label">Пауза между проходами — <b id="setMorseGapRepeatVal"></b></span>
+        <input type="range" id="setMorseGapRepeat" min="4" max="32" step="2">
+        <small id="setMorseGapRepeatHint"></small>
+      </label>
     </div>
     <div class="settings-actions">
       <button class="btn btn--ghost btn--sm" id="resetSettingsBtn">Вернуть значения по умолчанию</button>
