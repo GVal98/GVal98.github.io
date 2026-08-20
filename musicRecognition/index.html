@@ -228,6 +228,25 @@
     </div>
   </details>
 
+  <!-- Тренировка -->
+  <details class="card trainer">
+    <summary>Тренировка морзянки</summary>
+    <p class="hint">
+      Телефон загадывает исполнителя из двух сотен известных и отстукивает его
+      теми же настройками, какими стучит настоящий ответ. «Отстучать» повторяет
+      загаданное имя сколько угодно раз, «Следующий» берёт новое и сразу стучит.
+      Разбирать удобнее не глядя на экран: на ощупь считывается не точка с тире,
+      а форма всей буквы, и глаза этому только мешают.
+    </p>
+    <div class="control-row trainer-row">
+      <button class="btn btn--primary" id="trainBuzzBtn">Отстучать</button>
+      <button class="btn" id="trainShowBtn">Показать</button>
+      <button class="btn" id="trainNextBtn">Следующий</button>
+    </div>
+    <p class="trainer-answer" id="trainAnswer"></p>
+    <p class="readout trainer-code" id="trainCode"></p>
+  </details>
+
   <!-- Журнал -->
   <details class="card log">
     <summary>Журнал событий</summary>

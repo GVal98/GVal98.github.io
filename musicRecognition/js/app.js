@@ -2,6 +2,7 @@ import { AudioCapture } from './audio.js';
 import { MusicDetector, MusicGate } from './detector.js';
 import { recognize, trackKey, artworkUrl, links, AudDError } from './audd.js';
 import * as morse from './morse.js';
+import { ARTISTS } from './artists.js';
 
 // Приложение рассчитано на короткий трек-вопрос: 10–20 секунд музыки, потом
 // пауза на ответ, потом следующий вопрос. Отсюда все значения ниже — фрагмент
@@ -551,7 +552,10 @@ function makeEntry(result, key, req) {
 // плоскостность у него выше flatnessVeto, и оценка от него гасится, а не растёт.
 let vibrationWarned = false;
 
-function buzzArtist(artist) {
+// `secret` — тренировка: имя загадано, и в журнале ему не место. Сама строка
+// там всё равно нужна, иначе молчащий мотор не отличить от шаблона, который
+// браузер не пропустил.
+function buzzArtist(artist, { secret = false } = {}) {
   if (!settings.morse) return;
   if (typeof navigator.vibrate !== 'function') {
     // Один раз за сессию: телефон от этого вибрировать не начнёт, а журнал
@@ -565,14 +569,18 @@ function buzzArtist(artist) {
 
   const letters = spell(artist);
   if (!letters.length) {
-    log('', artist ? `«${artist}» нечем отстучать` : 'исполнитель неизвестен, вибрации не будет');
+    log('', secret ? 'загаданное имя нечем отстучать'
+      : artist ? `«${artist}» нечем отстучать` : 'исполнитель неизвестен, вибрации не будет');
     return;
   }
 
   // Вибрация в скрытой вкладке отбрасывается — это не наша ошибка, но и не
   // «всё сработало»: без строки в журнале молчащий телефон не объяснить.
   const sent = navigator.vibrate(morse.pattern(letters, timing()));
-  log('', `вибрация ${morse.word(letters)} · ${morse.dashes(letters)}` + (sent ? '' : ' — браузер не пропустил'));
+  const what = secret
+    ? `вслепую, ${letters.length} ${plural(letters.length, 'буква', 'буквы', 'букв')}`
+    : `${morse.word(letters)} · ${morse.dashes(letters)}`;
+  log('', `вибрация ${what}` + (sent ? '' : ' — браузер не пропустил'));
 }
 
 function stopBuzz() {
@@ -605,6 +613,67 @@ function timing(twice = settings.morseTwice) {
 // не «что это», а «те ли это буквы». Своей истории нет — берём образец.
 function buzzSample() {
   return current?.artist || history[0]?.artist || 'Queen';
+}
+
+/* ------------------------------------------------------------------ тренировка */
+
+// Азбуку не выучить по таблице: на ощупь считывается не точка с тире, а форма
+// всей буквы, и форма эта у каждого мотора и каждого кармана своя. Поэтому
+// тренажёр стучит теми же настройками, какими придёт настоящий ответ, — иначе
+// натренируется то, чего в квизе не будет.
+//
+// Имена берутся из списка известных, а не собираются из случайных букв: на ощупь
+// половину имени достраивает догадка, и тренировать надо в том числе её.
+let training = { name: '', shown: false };
+
+function trainPick() {
+  // Подряд одно и то же имя не загадываем: второй такой же проход читается как
+  // «угадал», хотя это просто тот же ответ ещё раз.
+  let next = training.name;
+  while (ARTISTS.length > 1 && next === training.name) {
+    next = ARTISTS[Math.floor(Math.random() * ARTISTS.length)];
+  }
+  training = { name: next, shown: false };
+}
+
+function trainBuzz() {
+  if (!training.name) trainPick();
+  renderTraining();
+  buzzArtist(training.name, { secret: !training.shown });
+}
+
+function trainNext() {
+  trainPick();
+  renderTraining();
+  buzzArtist(training.name, { secret: true });
+}
+
+function trainShow() {
+  if (!training.name) return;
+  training.shown = true;
+  renderTraining();
+}
+
+function renderTraining() {
+  const off = !settings.morse;
+  for (const id of ['trainBuzzBtn', 'trainNextBtn']) $(id).disabled = off;
+  // Показывать нечего, пока имя не загадано, и незачем, когда уже показано.
+  $('trainShowBtn').disabled = off || !training.name || training.shown;
+
+  const answer = $('trainAnswer'), code = $('trainCode');
+  answer.classList.toggle('is-waiting', !training.shown);
+  code.textContent = '';
+
+  if (off) { answer.textContent = 'Вибрация выключена — тренировать нечего.'; return; }
+  if (!training.name) { answer.textContent = 'Имя ещё не загадано.'; return; }
+  if (!training.shown) { answer.textContent = 'Имя загадано. Стучать его можно сколько угодно раз.'; return; }
+
+  // Показываем и имя целиком, и то, что от него дошло до мотора: разошлись они
+  // ещё до вибрации — артикль снят, буквы упрощены, лишнее отрезано, — и без
+  // второй строки «не угадал» выглядит ошибкой слуха, а не работой азбуки.
+  const letters = spell(training.name);
+  answer.textContent = training.name;
+  code.textContent = letters.length ? `${morse.word(letters)} · ${morse.dashes(letters)}` : '';
 }
 
 function plural(n, one, few, many) {
@@ -948,6 +1017,7 @@ function refreshMorseHint() {
     $(id).disabled = off;
   }
   $('setMorseGapRepeat').disabled = off || !settings.morseTwice;
+  renderTraining();
 
   if (off) {
     $('setMorseHint').textContent = 'Телефон молчит: ответ видно только на экране.';
@@ -1093,6 +1163,10 @@ function initSettings() {
   // дожидаться трека. Стучит то же, что придёт на распознавание, и на том же
   // имени, что показано в подсказке.
   $('testMorseBtn').addEventListener('click', () => buzzArtist(buzzSample()));
+
+  $('trainBuzzBtn').addEventListener('click', trainBuzz);
+  $('trainShowBtn').addEventListener('click', trainShow);
+  $('trainNextBtn').addEventListener('click', trainNext);
 
   $('resetSettingsBtn').addEventListener('click', () => {
     settings = { ...DEFAULTS, token: settings.token }; // ключ сбрасывать не за что

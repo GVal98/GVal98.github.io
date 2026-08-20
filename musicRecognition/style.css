@@ -356,6 +356,17 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 }
 .log-clip:hover { color: var(--accent); }
 
+/* --- Тренировка --- */
+.trainer-row { margin-top: 14px; }
+/* Кнопок три, и жмут их не глядя: 220 пикселей фиксированной ширины от
+   .control-row тут ни к чему, а попасть пальцем — как раз к месту. */
+.trainer-row .btn { flex: 1 1 150px; }
+.trainer-answer { margin: 14px 0 0; font-size: 16px; font-weight: 650; }
+/* Пока имя не показано, строка — это подпись, а не ответ. */
+.trainer-answer.is-waiting { font-size: 12.5px; font-weight: 400; color: var(--muted); }
+/* Знаки здесь — то, ради чего всё и затевалось: их читают, а не косятся на них. */
+.trainer-code { font-size: 13.5px; color: var(--text); letter-spacing: 0.06em; }
+
 /* --- Скрытый экран --- */
 /* Ответ приходит вибрацией, смотреть на страницу незачем: экран в зале светит
    на соседей, а на телефоне это ещё и главный потребитель батареи. Поэтому
