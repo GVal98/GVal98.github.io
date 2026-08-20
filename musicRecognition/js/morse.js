@@ -103,10 +103,16 @@ const MAX_CHARS = 5;
  * Имя — в латинские буквы и только в них. Пробелы, дефисы, скобки, апострофы
  * выбрасываются целиком: паузой они читались бы как ещё одна буква, а места
  * в пятёрке стоили бы столько же, сколько настоящая.
+ *
+ * Артикль The в начале не стучится вовсе. Три буквы из пяти он забирает себе,
+ * а различает ими ровно ничего: «The Beatles», «The Cure» и «The Doors» на ощупь
+ * начинаются одинаково, и всё, чем они отличаются, в пятёрку уже не поместилось.
+ * Снимается он первым, пока пробел после него на месте: «Theatre of Tragedy» —
+ * это не артикль, а по слитному THEATRE отличить одно от другого уже нельзя.
  */
 export function latin(name) {
   let out = '';
-  for (const ch of String(name ?? '').toUpperCase()) {  // ß → SS уже здесь
+  for (const ch of String(name ?? '').replace(/^\s*the\s+/i, '').toUpperCase()) {  // ß → SS уже здесь
     if (ch >= 'A' && ch <= 'Z') { out += ch; continue; }
     if (ch in TRANSLIT) { out += TRANSLIT[ch]; continue; }
     if (ch in DIGITS) { out += DIGITS[ch]; continue; }
