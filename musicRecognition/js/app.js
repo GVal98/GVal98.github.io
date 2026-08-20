@@ -7,7 +7,7 @@ import { recognize, trackKey, artworkUrl, links, AudDError } from './audd.js';
 // обязан целиком уместиться внутри самого короткого трека, иначе в отпечаток
 // попадёт пауза и начало следующего.
 const DEFAULTS = {
-  v: 2,              // версия набора настроек, см. loadSettings
+  v: 3,              // версия набора настроек, см. loadSettings
   token: '',         // пользователь вводит свой; хранится только в localStorage
   threshold: 0.35,   // середина коридора между тишиной и музыкой по замерам
   // Отправка приходит на (clip + LEAD_IN) секунде. На треке в 10 секунд это
@@ -15,12 +15,17 @@ const DEFAULTS = {
   // оценка сглажена, и момент пересечения порога отстаёт от реального начала
   // на треть секунды с небольшим. Длиннее фрагмент брать нечем.
   clip: 8,
-  // Строго короче паузы между вопросами, и это самая важная настройка здесь.
-  // Условие размыкания гейта — `>= releaseSec`, поэтому равенство проигрывает
-  // гонку следующему треку: при пороге 3 с и паузе 3 с раунд из шести вопросов
-  // склеивается в одну сессию и уходит один запрос вместо шести.
+  // Строго короче паузы между вопросами. Условие размыкания гейта —
+  // `>= releaseSec`, поэтому равенство проигрывает гонку следующему треку.
   silence: 2,
   attack: 2.5,       // подтверждение начала музыки
+  // Как часто переспрашивать, пока музыка не прерывалась. Нужно ровно для
+  // одного случая, но в квизе он самый обычный: в паузе между вопросами играет
+  // фоновая музыка, оценка не проваливается ни разу, гейт не размыкается — и
+  // весь раунд из шести вопросов выглядит одним бесконечным треком. Ни конца
+  // сессии, ни разрыва внутри неё не наступает, и заметить смену вопроса
+  // больше нечем: остаются только часы.
+  recheck: 20,
 };
 
 // Первые такты — худший материал для отпечатка: интро разрежено (мало
@@ -29,15 +34,27 @@ const DEFAULTS = {
 // всего, что у нас есть. Секунда снимает щелчок включения и на этом всё.
 const LEAD_IN = 1;
 
-// Повторов «не узнали» больше нет. Внутри трека длиной 10–20 секунд второго
-// фрагмента просто нет: отправка идёт на 9-й секунде, и любой следующий кусок
-// либо почти целиком повторяет первый, либо уже захватывает паузу на ответ и
-// начало следующего вопроса. Замер на раунде 6×(15 с музыки + 5 с ответа):
-// лестница 12/22/40 давала 4 запроса на весь раунд, из них один смешанный,
-// и три трека из шести не отправлялись вовсе.
-//
+// Провал оценки, после которого следующий кусок музыки считается новым треком,
+// даже если гейт так и не разомкнулся. Смысл имеет ровно один диапазон —
+// от этого числа до настройки «Пауза = трек закончился»: провалы длиннее её
+// разбирает сам гейт, обычной сменой сессии. Отсюда и значение: чем оно ниже,
+// тем шире полоса, которую гейт пропускает, а мы ловим. Ниже секунды опускать
+// нечего — оценка сглажена с постоянной около трети секунды, и на 1 с приходится
+// три её постоянные: тихий такт столько не держится, конец трека держится.
+// Ошибка в эту сторону дешёвая: лишний запрос, ответ на который совпадёт с
+// прошлым по ключу, и второй записи в истории не появится.
+const SEGMENT_DIP_SEC = 1;
+
+// Промах — ещё не приговор треку. Первый фрагмент это интро: пиков в спектре
+// мало, отпечаток жидкий, и «совпадений нет» приходит чаще всего именно на
+// него. Дальше в треке материал лучше, так что пара повторов окупается.
+// Раньше повторов не было вовсе, и после единственного промаха приложение
+// замолкало до конца раунда — если гейт при этом не размыкался, то навсегда.
+const MISS_RETRY_SEC = 12;
+const MISS_RETRIES = 2;
+
 // Сорвавшийся запрос — другое дело: ответа не было вообще, и повторить его
-// стоит, пока трек ещё звучит. Отсюда один короткий повтор.
+// стоит сразу, пока трек ещё звучит.
 const ERROR_RETRY_SEC = 3;
 const ERROR_RETRIES = 1;
 const REQUEST_TIMEOUT = 30;
@@ -202,7 +219,12 @@ async function start() {
   }
 
   detector = new MusicDetector(capture.sampleRate, capture.analyser.fftSize);
-  gate = new MusicGate({ threshold: settings.threshold, attackSec: settings.attack, releaseSec: settings.silence });
+  gate = new MusicGate({
+    threshold: settings.threshold,
+    attackSec: settings.attack,
+    releaseSec: settings.silence,
+    dipSec: SEGMENT_DIP_SEC,
+  });
   session = null;
   running = true;
   wasWarmingUp = true;
@@ -261,27 +283,58 @@ function onFrame({ analyser, samples }) {
   const event = gate.step(features.score, now);
   if (event === 'start') startSession();
   else if (event === 'stop') endSession();
+  // Музыка на секунду-другую прервалась и пошла снова, а гейт этого не заметил.
+  // Для нас это конец одного вопроса и начало следующего: сессия та же, а трек
+  // уже другой, и спрашивать про него надо заново.
+  else if (session && gate.segmentAt !== null && gate.segmentAt !== session.segmentAt) {
+    beginSegment(gate.segmentAt);
+    log('', `музыка прервалась и пошла снова, отправлю через ${untilCheck()} с`);
+  }
 
   if (session && !inFlight && now >= session.nextCheckAt) {
     runRecognition();
   }
 }
 
+function untilCheck() {
+  return Math.max(0, Math.round(session.nextCheckAt - capture.audioTime));
+}
+
 function startSession() {
-  session = {
-    startedAt: gate.startedAt,
-    startedAtWall: Date.now(),
-    errors: 0,
-    // Единственная отправка за сессию, и она приходит ровно в тот момент, когда
-    // фрагмент целиком набрался музыкой после отступа. Ждать дольше нечего:
-    // добавочные секунды в отпечаток уже не попадут, а риск, что трек кончится
-    // и в буфер начнёт заходить пауза, растёт с каждой.
-    nextCheckAt: gate.startedAt + settings.clip + LEAD_IN,
-    entry: null,
-  };
+  // entry живёт на всю сессию, а не на кусок: по нему сверяется, тот же трек
+  // ответил или уже другой, и разрыв внутри одного трека не должен плодить
+  // в истории вторую запись о нём же.
+  session = { entry: null };
+  beginSegment(gate.segmentAt ?? gate.startedAt);
   document.body.classList.add('is-music');
   refreshStatus();
-  log('', `музыка началась, отправлю через ${Math.round(session.nextCheckAt - capture.audioTime)} с`);
+  log('', `музыка началась, отправлю через ${untilCheck()} с`);
+}
+
+/**
+ * Новый непрерывный кусок музыки внутри сессии. В размыкающемся гейте это
+ * просто начало сессии, а в склеенном фоновой музыкой — следующий вопрос.
+ * Всё, что отсчитывается от начала трека, отсчитывается отсюда: и момент
+ * отправки, и длина фрагмента, и время начала записи в истории.
+ */
+function beginSegment(at) {
+  session.segmentAt = at;
+  // Часы стены по аудиочасам, а не Date.now(): кусок начался раньше, чем мы
+  // это подтвердили, и в истории должно стоять его настоящее начало.
+  session.segmentAtWall = Date.now() - Math.max(0, capture.audioTime - at) * 1000;
+  session.solved = false;
+  session.misses = 0;
+  session.errors = 0;
+  // Отправка приходит ровно в тот момент, когда фрагмент целиком набрался
+  // музыкой после отступа. Ждать дольше нечего: добавочные секунды в отпечаток
+  // уже не попадут, а риск захватить паузу растёт с каждой.
+  session.nextCheckAt = at + settings.clip + LEAD_IN;
+}
+
+// Промахнулись или узнали — дальше ждём либо разрыва в музыке, либо часов.
+// Бесконечность остаётся только там, где повторять нечего в принципе.
+function scheduleRecheck(s) {
+  s.nextCheckAt = settings.recheck ? capture.audioTime + settings.recheck : Infinity;
 }
 
 function endSession() {
@@ -293,9 +346,9 @@ function endSession() {
   log('', 'музыка смолкла');
 }
 
-function closeEntry(entry) {
+function closeEntry(entry, at = Date.now()) {
   if (!entry.endWall) {
-    entry.endWall = Date.now();
+    entry.endWall = at;
     saveHistory();
     renderHistory();
   }
@@ -306,11 +359,18 @@ function closeEntry(entry) {
 async function runRecognition() {
   if (inFlight || !capture || !session) return;
 
+  // Слепок куска на момент отправки. Пока запрос в полёте, музыка успевает и
+  // смолкнуть, и прерваться на секунду: в первом случае сессии больше нет, во
+  // втором расписание уже переставлено под следующий вопрос. Ответ и там и там
+  // относится к прошлому куску, и трогать по нему текущее расписание нельзя.
   const s = session;
-  // Тишина до начала музыки в отпечатке — мёртвый груз: она отъедает секунды
-  // у единственного фрагмента, который мы отправляем. Берём не больше, чем
-  // музыки реально прозвучало.
-  const seconds = Math.min(settings.clip, capture.audioTime - s.startedAt);
+  const req = { s, seg: s.segmentAt, segWall: s.segmentAtWall };
+  req.live = () => s === session && s.segmentAt === req.seg;
+
+  // Считаем от начала куска, а не сессии: в склеенной сессии до него лежат
+  // пауза и конец предыдущего вопроса, и в отпечатке им делать нечего.
+  // На первых секундах куска берём только то, что успело прозвучать.
+  const seconds = Math.min(settings.clip, capture.audioTime - req.seg);
 
   const clip = capture.makeClip(seconds);
   if (!clip) return;
@@ -328,8 +388,8 @@ async function runRecognition() {
     });
     requests++;
     el.counter.textContent = `${requests} ${plural(requests, 'запрос', 'запроса', 'запросов')}`;
-    if (result) handleMatch(result, s);
-    else handleNoMatch(s);
+    if (result) handleMatch(result, req);
+    else handleNoMatch(req);
   } catch (e) {
     log('err',
       e instanceof AudDError ? `AudD: ${e.message}`
@@ -339,13 +399,15 @@ async function runRecognition() {
     // значит просто выкидывать клипы в пустоту до конца раунда.
     const fatal = e instanceof AudDError && (e.code === 900 || e.code === 901);
     showError(fatal ? e.message : '');
-    if (s === session) {
-      if (!fatal && s.errors < ERROR_RETRIES) {
+    if (req.live()) {
+      if (fatal) {
+        s.nextCheckAt = Infinity;
+      } else if (s.errors < ERROR_RETRIES) {
         s.errors++;
         s.nextCheckAt = capture.audioTime + ERROR_RETRY_SEC;
         log('warn', `повтор через ${ERROR_RETRY_SEC} с`);
       } else {
-        s.nextCheckAt = Infinity;
+        scheduleRecheck(s);
       }
     }
   } finally {
@@ -354,37 +416,59 @@ async function runRecognition() {
   }
 }
 
-function handleMatch(result, s) {
+function handleMatch(result, req) {
+  const { s } = req;
   const key = trackKey(result);
 
-  if (s?.entry && s.entry.key === key) {
+  // Сравниваем с последним треком сессии, а не куска: разрыв мог случиться и
+  // внутри трека — на тихом проигрыше, на смене части. Тогда ответ придёт тот
+  // же самый, и заводить на него вторую запись в истории не за что.
+  if (s.entry && s.entry.key === key) {
     log('ok', `всё ещё «${result.title}»`);
   } else {
-    if (s?.entry) closeEntry(s.entry);
-    const entry = makeEntry(result, key, s);
-    if (s) s.entry = entry;
+    // Прошлый трек кончился на границе куска, а не сейчас: иначе его
+    // длительность вобрала бы и паузу, и начало этого.
+    if (s.entry) closeEntry(s.entry, req.segWall);
+    const entry = makeEntry(result, key, req);
+    s.entry = entry;
     current = entry;
     history.unshift(entry);
     history = history.slice(0, HISTORY_LIMIT);
     saveHistory();
+    // Кусок, к которому относится ответ, мог кончиться, пока запрос был в
+    // полёте: закрыть запись потом будет уже некому, и в истории она осталась
+    // бы играющей вечно. Закрываем сразу — по границе, а не по «сейчас».
+    if (!req.live()) closeEntry(entry, s === session ? s.segmentAtWall : Date.now());
     renderHistory();
     renderNow(true);
     log('ok', `${result.artist} — ${result.title}`);
   }
 
-  // Трек определён — до следующей паузы больше не спрашиваем.
-  if (s && s === session) s.nextCheckAt = Infinity;
+  if (req.live()) {
+    s.solved = true;
+    scheduleRecheck(s);
+  }
 }
 
-function handleNoMatch(s) {
+function handleNoMatch(req) {
   log('warn', 'совпадений нет');
-  if (s === session) s.nextCheckAt = Infinity;
+  if (!req.live()) return;
+  const { s } = req;
+  if (s.misses < MISS_RETRIES) {
+    s.misses++;
+    s.nextCheckAt = capture.audioTime + MISS_RETRY_SEC;
+    log('', `попробую другой фрагмент через ${MISS_RETRY_SEC} с`);
+  } else {
+    // Три промаха подряд по разным фрагментам — это уже не «взяли не тот
+    // кусок», а трек, которого в базе AudD нет. Дальше только по часам.
+    scheduleRecheck(s);
+  }
 }
 
-// Сессию берём параметром, а не из глобальной: пока запрос был в полёте,
-// музыка могла смолкнуть и endSession успел её занулить — тогда начало трека
-// в истории оказалось бы равно моменту распознавания, и длительность соврала бы.
-function makeEntry(result, key, s) {
+// Начало берём из слепка запроса, а не из текущего состояния: пока запрос был
+// в полёте, музыка могла смолкнуть или прерваться, и начало трека в истории
+// оказалось бы равно моменту распознавания либо началу уже следующего вопроса.
+function makeEntry(result, key, req) {
   return {
     id: `${Date.now()}-${Math.round(performance.now())}`,
     key,
@@ -395,7 +479,7 @@ function makeEntry(result, key, s) {
     releaseDate: result.release_date || '',
     art: artworkUrl(result, 300),
     links: links(result),
-    startWall: s?.startedAtWall ?? Date.now(),
+    startWall: req.segWall,
     recognizedWall: Date.now(),
     endWall: null,
   };
@@ -496,7 +580,7 @@ function render() {
   el.phase.textContent = features.warmingUp
     ? 'меряю фон комнаты'
     : session
-      ? (session.entry ? 'трек определён' : 'музыка играет, собираю фрагмент')
+      ? (session.solved ? 'трек определён' : 'музыка играет, собираю фрагмент')
       : 'жду музыку';
 
   el.readout.textContent =
@@ -612,6 +696,12 @@ function initSettings() {
   bindRange('setThreshold', 'threshold', (v) => `${Math.round(v * 100)}%`, applyGate);
   bindRange('setClip', 'clip', (v) => `${v} с`, refreshClipHint);
   bindRange('setSilence', 'silence', (v) => `${v} с`, applyGate);
+  // Пересчёт на месте: сессия, которой уже нечего делать, стоит на
+  // бесконечности, и без него включённый переспрос подействовал бы только
+  // со следующего трека — то есть ровно тогда, когда он и не нужен.
+  bindRange('setRecheck', 'recheck', (v) => (v ? `каждые ${v} с` : 'не переспрашивать'), () => {
+    if (session && (session.solved || !Number.isFinite(session.nextCheckAt))) scheduleRecheck(session);
+  });
   refreshClipHint();
 
   $('resetSettingsBtn').addEventListener('click', () => {

@@ -311,12 +311,19 @@ export class MusicDetector {
  * между куплетами обрывала бы сессию, а случайный шум начинал новую.
  */
 export class MusicGate {
-  constructor({ threshold = 0.55, attackSec = 2.5, releaseSec = 5 } = {}) {
-    Object.assign(this, { threshold, attackSec, releaseSec });
+  constructor({ threshold = 0.55, attackSec = 2.5, releaseSec = 5, dipSec = 1.5 } = {}) {
+    Object.assign(this, { threshold, attackSec, releaseSec, dipSec });
     this.playing = false;
     this.aboveSince = null;
     this.belowSince = null;
     this.startedAt = null;
+    // Начало текущего непрерывного куска музыки. От startedAt отличается тем,
+    // что переставляется и внутри сессии — на каждом провале длиннее dipSec.
+    // Нужно для случая, когда сессия не кончается там, где кончается трек:
+    // в паузе между вопросами играет фон, оценка проваливается на пару секунд,
+    // но до releaseSec не дотягивает, и гейт держит одну сессию на весь раунд.
+    // Провал при этом виден, и следующий кусок музыки — уже другой трек.
+    this.segmentAt = null;
   }
 
   configure(opts) { Object.assign(this, opts); }
@@ -330,8 +337,12 @@ export class MusicGate {
     const above = score >= this.threshold;
 
     if (above) {
+      // Провал короче dipSec — тихий такт, затакт, вдох между куплетами:
+      // кусок музыки продолжается. Длиннее — считаем, что это уже другая музыка.
+      if (this.belowSince !== null && now - this.belowSince >= this.dipSec) this.segmentAt = null;
       this.belowSince = null;
       if (this.aboveSince === null) this.aboveSince = now;
+      if (this.segmentAt === null) this.segmentAt = this.aboveSince;
       if (!this.playing && now - this.aboveSince >= this.attackSec) {
         this.playing = true;
         // Начало трека — момент, когда уровень пошёл вверх, а не когда
@@ -345,6 +356,7 @@ export class MusicGate {
       if (this.playing && now - this.belowSince >= this.releaseSec) {
         this.playing = false;
         this.startedAt = null;
+        this.segmentAt = null;
         return 'stop';
       }
     }
@@ -353,6 +365,6 @@ export class MusicGate {
 
   reset() {
     this.playing = false;
-    this.aboveSince = this.belowSince = this.startedAt = null;
+    this.aboveSince = this.belowSince = this.startedAt = this.segmentAt = null;
   }
 }
