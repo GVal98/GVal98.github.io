@@ -27,10 +27,16 @@
   <section class="card control">
     <div class="control-row">
       <button class="btn btn--primary" id="toggleBtn">Начать слушать</button>
+      <button class="btn" id="blankBtn">Скрыть экран</button>
     </div>
     <p class="hint">
       Слушает микрофон и сам замечает, что заиграла музыка. Держите устройство
       так, чтобы колонки было слышно, — громкость важнее близости.
+    </p>
+    <p class="hint">
+      «Скрыть экран» убирает страницу целиком: приложение слушает и стучит морзянкой
+      дальше, но на экране пусто — ни названия трека, ни настроек. Экран при этом
+      горит, иначе умолкнет и вибрация. Обратно — долгим касанием.
     </p>
     <p class="notice" id="tokenNotice" hidden>
       Нужен свой ключ AudD — заведите его на
@@ -188,6 +194,26 @@
         <small id="setMorseGapRepeatHint"></small>
       </label>
     </div>
+    <h3 class="settings-head">Скрытый экран</h3>
+    <div class="settings-grid">
+      <div class="field">
+        <label class="field-label field-check">
+          <input type="checkbox" id="setBlankWhite">
+          <span>Белый экран вместо чёрного</span>
+        </label>
+        <small>Чёрный не светит в тёмном зале и на OLED почти ничего не тратит.
+          Белый берут, когда чёрный экран путают с выключенным телефоном.</small>
+      </div>
+
+      <label class="field">
+        <span class="field-label">Держать, чтобы вернуть экран — <b id="setBlankHoldVal"></b></span>
+        <input type="range" id="setBlankHold" min="0.5" max="4" step="0.5">
+        <small>Короткое касание не считается: в кармане телефон нажимается сам.
+          Сдвиг пальца сбрасывает отсчёт, а пока держите — видно, что приложение
+          делает и что услышало последним.</small>
+      </label>
+    </div>
+
     <div class="settings-actions">
       <button class="btn btn--ghost btn--sm" id="resetSettingsBtn">Вернуть значения по умолчанию</button>
       <button class="btn btn--ghost btn--sm" id="testMorseBtn">Проверить вибрацию</button>
@@ -200,6 +226,15 @@
     <ul class="log-list" id="logList"></ul>
   </details>
 </main>
+
+<!-- Пустой экран поверх всего: приложение работает, интерфейса нет. -->
+<div class="blank" id="blank" hidden>
+  <div class="blank-hint">
+    <div class="blank-state" id="blankState"></div>
+    <div>Держите, чтобы вернуть экран</div>
+    <div class="blank-bar"><i id="blankBar"></i></div>
+  </div>
+</div>
 
 <script type="module" src="./js/app.js"></script>
 </body>

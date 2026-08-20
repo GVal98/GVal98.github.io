@@ -356,6 +356,56 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 }
 .log-clip:hover { color: var(--accent); }
 
+/* --- Скрытый экран --- */
+/* Ответ приходит вибрацией, смотреть на страницу незачем: экран в зале светит
+   на соседей, а на телефоне это ещё и главный потребитель батареи. Поэтому
+   не «свернуть интерфейс», а закрыть его целиком — сплошной заливкой поверх
+   всего, включая шапку. Страница под ней остаётся живой: слушает и стучит. */
+.blank {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Экран целиком — одна большая кнопка «держать». Браузеру на нём делать
+     нечего: ни прокрутки, ни зума по двойному тапу, ни выделения текста,
+     ни системного меню по долгому нажатию — оно бы и перебило сам жест. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  cursor: none;
+}
+.blank.is-white { background: #fff; }
+/* Под заливкой всё равно не видно — но и рисовать этого не надо. */
+body.is-blank > .topbar, body.is-blank > main { visibility: hidden; }
+body.is-blank { overflow: hidden; }
+
+.blank-hint {
+  width: min(280px, 62vw);
+  text-align: center;
+  font-size: 12.5px;
+  line-height: 1.5;
+  pointer-events: none;
+  opacity: 0;
+  /* Гаснет сразу, зажигается с задержкой: случайное касание не должно
+     подсвечивать комнату. */
+  transition: opacity 0.12s;
+  color: #4a4a4a;
+}
+.blank.is-white .blank-hint { color: #b0b0b0; }
+.blank.is-holding .blank-hint { opacity: 1; transition: opacity 0.25s 0.15s; }
+
+.blank-state { color: #5e5e5e; margin-bottom: 4px; }
+.blank.is-white .blank-state { color: #969696; }
+
+.blank-bar { margin-top: 9px; height: 2px; background: #232323; border-radius: 2px; overflow: hidden; }
+.blank.is-white .blank-bar { background: #dedede; }
+.blank-bar i { display: block; height: 100%; width: 0; background: #6a6a6a; }
+.blank.is-white .blank-bar i { background: #9a9a9a; }
+
 @media (max-width: 520px) {
   .now { flex-direction: column; }
   .now-art { width: 88px; height: 88px; }

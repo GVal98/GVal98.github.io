@@ -46,6 +46,9 @@ const DEFAULTS = {
   // дольше самого трека-вопроса. Поэтому отдельной галочкой: одному нужно
   // успеть поймать начало, другому — не вибрировать сквозь следующий вопрос.
   morseTwice: true,
+  // Скрытый экран: страницы не видно, приложение слушает и стучит дальше.
+  blankWhite: false,  // чёрный или белый — на сам звук это не влияет никак
+  blankHold: 1.5,     // сколько держать палец, чтобы вернуть интерфейс
 };
 
 // Первые такты — худший материал для отпечатка: интро разрежено (мало
@@ -97,7 +100,13 @@ const el = {
   nowTitle: $('nowTitle'), nowArtist: $('nowArtist'), nowMeta: $('nowMeta'), nowLinks: $('nowLinks'),
   historyList: $('historyList'), historyEmpty: $('historyEmpty'), clearHistory: $('clearHistoryBtn'),
   log: $('logList'), tokenNotice: $('tokenNotice'),
+  blankBtn: $('blankBtn'), blank: $('blank'), blankState: $('blankState'), blankBar: $('blankBar'),
 };
+
+// Цвет системной строки браузера. На скрытом экране она — последнее, что от
+// интерфейса остаётся, если полноэкранного режима в этом браузере нет.
+const themeMeta = document.querySelector('meta[name="theme-color"]');
+const THEME_COLOR = themeMeta?.content || '#0b0d12';
 
 let settings = loadSettings();
 let history = loadHistory();
@@ -113,6 +122,7 @@ let running = false;
 let wasWarmingUp = true;  // чтобы сообщить о замере фона ровно один раз
 let wakeLock = null;
 let rafId = 0;
+let blank = false;       // экран скрыт, приложение работает
 const spectrumBars = new Float32Array(72);
 
 /* ------------------------------------------------------------------ хранилище */
@@ -214,6 +224,7 @@ async function start() {
   if (!settings.token) return promptForToken();
   showError('');
   el.toggle.disabled = true;
+  el.blankBtn.disabled = true;
   // Пока браузер показывает запрос доступа, промис висит без единого признака
   // жизни в интерфейсе — говорим, чего ждём.
   setStatus('busy', 'Жду доступ к микрофону…');
@@ -229,6 +240,7 @@ async function start() {
     try { await capture.stop(); } catch { /* останавливать нечего */ }
     capture = null;
     el.toggle.disabled = false;
+    el.blankBtn.disabled = false;
     showError(
       e.name === 'NotAllowedError' ? 'Доступ к микрофону не разрешён. Разрешите его в адресной строке и попробуйте снова.'
       : e.name === 'NotFoundError' ? 'Не найден микрофон.'
@@ -252,6 +264,7 @@ async function start() {
   document.body.classList.add('is-running');
   el.monitor.hidden = false;
   el.toggle.disabled = false;
+  el.blankBtn.disabled = false;
   el.toggle.textContent = 'Остановить';
   el.toggle.classList.replace('btn--primary', 'btn--stop');
   refreshStatus();
@@ -276,9 +289,14 @@ async function stop() {
   el.toggle.textContent = 'Начать слушать';
   el.toggle.classList.replace('btn--stop', 'btn--primary');
   el.toggle.disabled = false;
+  el.blankBtn.disabled = false;
   el.phase.textContent = 'остановлено';
   refreshStatus();
   releaseWakeLock();
+  // Скрытый экран пустой ровно потому, что за ним всё работает. Когда работать
+  // перестало — от микрофона до самой вкладки, — держать заливку значит показывать
+  // ровно то же самое чёрное поле вместо причины, по которой всё смолкло.
+  exitBlank('слушать перестали — вернул экран');
   // Нажали «Остановить» посреди морзянки — дослушивать её незачем, распознавание
   // уже выключено. Тем более при уходе со страницы: там шаблон пережил бы саму
   // вкладку и телефон продолжил бы стучать в пустоту.
@@ -423,6 +441,9 @@ async function runRecognition() {
     // значит просто выкидывать клипы в пустоту до конца раунда.
     const fatal = e instanceof AudDError && (e.code === 900 || e.code === 901);
     showError(fatal ? e.message : '');
+    // Ключ не работает или лимит выбран: запросов больше не будет, а на скрытом
+    // экране это неотличимо от тишины в зале. Показываем, в чём дело.
+    if (fatal) exitBlank('AudD отказал — вернул экран');
     if (req.live()) {
       if (fatal) {
         s.nextCheckAt = Infinity;
@@ -651,7 +672,7 @@ function renderHistory() {
 function render() {
   if (!running) { rafId = 0; return; }
   rafId = requestAnimationFrame(render);
-  if (document.hidden || !features || !detector) return;
+  if (document.hidden || blank || !features || !detector) return;
 
   const pct = Math.round(features.score * 100);
   el.scoreFill.style.width = `${pct}%`;
@@ -727,15 +748,130 @@ function releaseWakeLock() {
   wakeLock = null;
 }
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && running) {
-    requestWakeLock();
-    // rAF в скрытой вкладке не отменяется, а откладывается: отложенный колбэк
-    // сработает при возврате. Планировать ещё один, не сняв прежний, — значит
-    // завести второй параллельный цикл отрисовки, и так на каждое сворачивание.
+  if (document.hidden || !running) return;
+  // Лок возвращается в любом случае: на скрытом экране он и держит всё
+  // остальное — погасший экран на телефоне уносит с собой и захват звука.
+  requestWakeLock();
+  if (blank) return;
+  // rAF в скрытой вкладке не отменяется, а откладывается: отложенный колбэк
+  // сработает при возврате. Планировать ещё один, не сняв прежний, — значит
+  // завести второй параллельный цикл отрисовки, и так на каждое сворачивание.
+  cancelAnimationFrame(rafId);
+  rafId = requestAnimationFrame(render);
+});
+
+/* ---------------------------------------------------------------- пустой экран */
+
+// Смотреть на страницу незачем: ответ приходит вибрацией, а светящийся экран
+// в зале виден соседям и съедает батарею быстрее всего остального. Поэтому
+// интерфейс не сворачивается, а закрывается целиком — сплошной заливкой поверх
+// всего. Под ней ничего не меняется: звук снимает ворклет, а не отрисовка,
+// и распознавание с морзянкой идут своим чередом на уже выставленных
+// настройках. Отрисовка при этом останавливается совсем — рисовать под
+// заливкой некому и не для кого.
+
+const HOLD_MOVE_LIMIT = 24; // px, после которых нажатие считается движением
+let holdRaf = 0;
+let holdFrom = null;
+
+async function enterBlank() {
+  // disabled — это ещё и «микрофон уже запрашивается»: второе нажатие открыло бы
+  // второй захват поверх первого.
+  if (blank || el.blankBtn.disabled) return;
+  // Прятать нечего, пока не слушаем. Разрешение на микрофон спрашивается
+  // до заливки: отказ должен быть виден, а не спрятан под чёрным экраном.
+  if (!running) {
+    await start();
+    if (!running) return;
+  }
+  blank = true;
+  el.blank.hidden = false;
+  el.blank.classList.toggle('is-white', settings.blankWhite);
+  document.body.classList.add('is-blank');
+  setThemeColor(settings.blankWhite ? '#ffffff' : '#000000');
+  cancelAnimationFrame(rafId);
+  rafId = 0;
+  // Адресная строка — тоже интерфейс. Где полноэкранного режима нет
+  // (iOS Safari) или где жест уже протух после запроса микрофона, остаётся
+  // просто пустая страница — ради неё всё и затевалось.
+  try { await document.documentElement.requestFullscreen?.({ navigationUI: 'hide' }); }
+  catch { /* отказ полноэкранного режима заливке не мешает */ }
+  log('', 'экран скрыт — слушаю дальше');
+}
+
+function exitBlank(why = 'экран возвращён') {
+  if (!blank) return;
+  blank = false;
+  cancelHold();
+  el.blank.hidden = true;
+  document.body.classList.remove('is-blank');
+  setThemeColor(THEME_COLOR);
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  if (running) {
     cancelAnimationFrame(rafId);
     rafId = requestAnimationFrame(render);
   }
+  log('', why);
+}
+
+function setThemeColor(color) {
+  if (themeMeta) themeMeta.content = color;
+}
+
+// Пока держат палец — показываем, чем приложение занято. Это единственный
+// способ отличить работающий чёрный экран от погасшего телефона, не выходя
+// из режима: коснулся, прочитал, отпустил.
+function blankStatus() {
+  const state = !running ? 'остановлено'
+    : inFlight ? 'распознаю'
+    : gate?.playing ? 'играет музыка'
+    : 'слушаю';
+  const last = current ? `${current.artist} — ${current.title}` : 'пока ничего не распознано';
+  return `${state} · ${last}`;
+}
+
+function beginHold(e) {
+  if (!blank) return;
+  cancelHold();
+  holdFrom = { x: e.clientX, y: e.clientY };
+  // Захват указателя: без него отпускание за краем окна до нас не дойдёт,
+  // и отсчёт добежал бы до конца уже после того, как палец убрали.
+  try { el.blank.setPointerCapture(e.pointerId); } catch { /* мышь без id */ }
+  el.blankState.textContent = blankStatus();
+  el.blank.classList.add('is-holding');
+  // Отсчёт от кадра, а не от таймера: полоска и выход должны кончиться
+  // одновременно, иначе она либо не доходит до края, либо стоит полной.
+  const started = performance.now();
+  const step = () => {
+    const done = (performance.now() - started) / (settings.blankHold * 1000);
+    el.blankBar.style.width = `${Math.min(1, done) * 100}%`;
+    if (done >= 1) exitBlank();
+    else holdRaf = requestAnimationFrame(step);
+  };
+  holdRaf = requestAnimationFrame(step);
+}
+
+function cancelHold() {
+  cancelAnimationFrame(holdRaf);
+  holdRaf = 0;
+  holdFrom = null;
+  el.blank.classList.remove('is-holding');
+  el.blankBar.style.width = '0';
+}
+
+el.blank.addEventListener('pointerdown', beginHold);
+el.blank.addEventListener('pointerup', () => cancelHold());
+el.blank.addEventListener('pointercancel', () => cancelHold());
+// Телефон в кармане нажимается сам, но он же там и ездит. Сдвиг пальца
+// сбрасывает отсчёт — случайное нажатие почти всегда со сдвигом, нарочное
+// почти всегда без.
+el.blank.addEventListener('pointermove', (e) => {
+  if (!holdFrom) return;
+  if (Math.hypot(e.clientX - holdFrom.x, e.clientY - holdFrom.y) > HOLD_MOVE_LIMIT) cancelHold();
 });
+// С клавиатуры держать нечего. В полноэкранном режиме первый Escape забирает
+// себе браузер — тогда экран вернётся со второго.
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') exitBlank(); });
 
 /* --------------------------------------------------------------- настройки UI */
 
@@ -894,6 +1030,14 @@ function initSettings() {
                     'setMorseGapLetter', 'setMorseGapRepeat']) {
     $(id).addEventListener('change', () => buzzArtist(buzzSample()));
   }
+  // Цвет виден сразу, а не со следующего скрытия: галочку щёлкают, чтобы
+  // посмотреть, каким экран будет.
+  bindCheck('setBlankWhite', 'blankWhite', () => {
+    el.blank.classList.toggle('is-white', settings.blankWhite);
+    if (blank) setThemeColor(settings.blankWhite ? '#ffffff' : '#000000');
+  });
+  bindRange('setBlankHold', 'blankHold', (v) => `${v} с`);
+
   refreshClipHint();
   refreshMorseHint();
 
@@ -912,6 +1056,7 @@ function initSettings() {
 /* --------------------------------------------------------------------- запуск */
 
 el.toggle.addEventListener('click', () => (running ? stop() : start()));
+el.blankBtn.addEventListener('click', enterBlank);
 el.clearHistory.addEventListener('click', () => {
   history = [];
   current = null;
@@ -929,4 +1074,5 @@ if (!settings.token) document.querySelector('.settings').open = true;
 if (!navigator.mediaDevices?.getUserMedia) {
   showError('Браузер не умеет захватывать звук. Нужен современный Chrome, Firefox, Edge или Safari по HTTPS.');
   el.toggle.disabled = true;
+  el.blankBtn.disabled = true; // прятать нечего: слушать этот браузер всё равно не будет
 }
