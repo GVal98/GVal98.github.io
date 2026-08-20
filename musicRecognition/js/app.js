@@ -33,6 +33,11 @@ const DEFAULTS = {
   // того, что ещё различается на ощупь.
   morse: 120,
   morseLetters: 5,     // сколько букв имени стучим
+  // Упрощённая азбука: шесть букв без собственного звука заменяются созвучными
+  // (Q → K, Y → I, J → G, C и Z → S, V → W). Включена, потому что на ощупь
+  // считают знаки, а не буквы: все шесть заменяемых кодов четырёхзначные
+  // и отличаются друг от друга одним знаком из четырёх.
+  morseSimple: true,
   morseDash: 3,        // тире, в точках — как в самой азбуке
   // Паузы против канонических 1 и 3 растянуты втрое и почти втрое. Причина одна
   // и та же: мотор к концу сигнала ещё дотряхивает корпус, и на канонической
@@ -555,7 +560,7 @@ function buzzArtist(artist) {
     return;
   }
 
-  const letters = morse.spell(artist, settings.morseLetters);
+  const letters = spell(artist);
   if (!letters.length) {
     log('', artist ? `«${artist}» нечем отстучать` : 'исполнитель неизвестен, вибрации не будет');
     return;
@@ -569,6 +574,13 @@ function buzzArtist(artist) {
 
 function stopBuzz() {
   navigator.vibrate?.(0);
+}
+
+// Из настроек морзянка берёт не только длительности, но и саму азбуку: сколько
+// букв стучать и какими. Один разбор на всех, чтобы вибрация, подсказка и цена
+// буквы не разъехались, когда добавится ещё что-нибудь.
+function spell(name = buzzSample()) {
+  return morse.spell(name, settings.morseLetters, settings.morseSimple);
 }
 
 // Настройки хранятся плоско — иначе новый ключ, добавленный к уже сохранённому
@@ -924,11 +936,11 @@ let morseSyncs = [];
 function refreshMorseHint() {
   const dot = settings.morse;
   const secs = (ms) => `${(ms / 1000).toFixed(1)} с`;
-  const letters = morse.spell(buzzSample(), settings.morseLetters);
+  const letters = spell();
   const off = !dot;
 
   for (const sync of morseSyncs) sync();
-  for (const id of ['testMorseBtn', 'setMorseLetters', 'setMorseDash', 'setMorseGapSym',
+  for (const id of ['testMorseBtn', 'setMorseLetters', 'setMorseSimple', 'setMorseDash', 'setMorseGapSym',
                     'setMorseGapLetter', 'setMorseTwice', 'setMorseGapRepeat']) {
     $(id).disabled = off;
   }
@@ -937,7 +949,8 @@ function refreshMorseHint() {
   if (off) {
     $('setMorseHint').textContent = 'Телефон молчит: ответ видно только на экране.';
     $('setMorseTwiceHint').textContent = 'Повторять нечего — вибрация выключена.';
-    for (const id of ['setMorseLettersHint', 'setMorseGapSymHint', 'setMorseGapLetterHint', 'setMorseGapRepeatHint']) {
+    for (const id of ['setMorseLettersHint', 'setMorseSimpleHint', 'setMorseGapSymHint',
+                      'setMorseGapLetterHint', 'setMorseGapRepeatHint']) {
       $(id).textContent = '';
     }
     stopBuzz(); // выключили посреди морзянки — она не должна доиграть
@@ -958,6 +971,27 @@ function refreshMorseHint() {
   $('setMorseLettersHint').textContent =
     `Только латиница: кириллица транслитерируется, цифра идёт первой буквой английского счёта (2 → T), ` +
     `пробелы и знаки выбрасываются. Каждая лишняя буква — это ещё ${secs(perLetterMs())} вибрации.`;
+
+  // Что именно упрощение сделало с этим именем, видно только рядом с полной
+  // азбукой: «KUEEN» сам по себе выглядит опечаткой, а не заменой.
+  const full = morse.spell(buzzSample(), settings.morseLetters);
+  const pairs = morse.simplePairs().map(({ from, to }) => `${from.join(' и ')} → ${to}`).join(', ');
+  // Короче — почти всегда, но не по определению: тире и пауза внутри буквы
+  // задаются отдельно, и на длинном тире с короткой паузой ·−− (W) успевает
+  // обогнать ···− (V). Поэтому не обещаем, а считаем.
+  const saved = morse.totalMs(full, timing()) - morse.totalMs(letters, timing());
+  const delta = Math.abs(saved) < 50 ? '' : `, на ${secs(Math.abs(saved))} ${saved > 0 ? 'короче' : 'длиннее'}`;
+  $('setMorseSimpleHint').textContent =
+    `Шесть букв, у которых нет своего звука, заменяются теми, что звучат за них: ${pairs}. ` +
+    `Кодов остаётся двадцать вместо двадцати шести, и все шесть были четырёхзначными — ` +
+    `имя пишется с ошибкой, зато на ощупь в нём меньше знаков, которые можно потерять. ` +
+    (!settings.morseSimple
+      ? 'Сейчас имя уходит полной азбукой, всеми двадцатью шестью кодами.'
+      : !letters.length
+        ? ''
+        : morse.word(full) !== morse.word(letters)
+          ? `«${morse.word(full)}» уходит в мотор как «${morse.word(letters)}»${delta}.`
+          : `В «${morse.word(letters)}» заменять нечего — на ощупь ничего не изменится.`);
 
   $('setMorseGapSymHint').textContent =
     `Между точками и тире одной буквы. В самой азбуке она равна точке, но мотор к концу сигнала ещё ` +
@@ -985,7 +1019,7 @@ function refreshMorseHint() {
 // Цена одной буквы — не константа: она зависит и от кода буквы, и от всех пауз.
 // Берём среднее по тому, что стучится сейчас, — врать оно может только в мелочи.
 function perLetterMs() {
-  const letters = morse.spell(buzzSample(), settings.morseLetters);
+  const letters = spell();
   if (!letters.length) return 0;
   return morse.totalMs(letters, timing()) / letters.length;
 }
@@ -1026,6 +1060,7 @@ function initSettings() {
   // input: во время перетаскивания каждое движение обрывало бы предыдущий шаблон,
   // и под пальцем была бы не морзянка, а дребезг.
   bindCheck('setMorseTwice', 'morseTwice', () => { refreshMorseHint(); buzzArtist(buzzSample()); });
+  bindCheck('setMorseSimple', 'morseSimple', () => { refreshMorseHint(); buzzArtist(buzzSample()); });
   for (const id of ['setMorse', 'setMorseLetters', 'setMorseDash', 'setMorseGapSym',
                     'setMorseGapLetter', 'setMorseGapRepeat']) {
     $(id).addEventListener('change', () => buzzArtist(buzzSample()));
