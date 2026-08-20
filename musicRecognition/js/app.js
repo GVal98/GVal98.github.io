@@ -30,8 +30,13 @@ const DEFAULTS = {
   // Длина точки в вибрации имени исполнителя, 0 — не вибрировать. Мотор
   // телефона раскручивается и тормозит десятки миллисекунд, и на короткой
   // единице точка с тире сливаются в невнятный гул: 120 мс — низ того, что
-  // ещё различается на ощупь, и при этом пять букв укладываются в 4–7 секунд.
+  // ещё различается на ощупь. Пять букв при ней — 7–10 секунд: паузы удвоены
+  // против канонических, иначе мотор смазывает точку с тире.
   morse: 120,
+  // Повтор удваивает и без того немалое время — при 120 мс это 14–23 секунды,
+  // дольше самого трека-вопроса. Поэтому отдельной галочкой: одному нужно
+  // успеть поймать начало, другому — не вибрировать сквозь следующий вопрос.
+  morseTwice: true,
 };
 
 // Первые такты — худший материал для отпечатка: интро разрежено (мало
@@ -528,7 +533,7 @@ function buzzArtist(artist) {
 
   // Вибрация в скрытой вкладке отбрасывается — это не наша ошибка, но и не
   // «всё сработало»: без строки в журнале молчащий телефон не объяснить.
-  const sent = navigator.vibrate(morse.pattern(letters, settings.morse));
+  const sent = navigator.vibrate(morse.pattern(letters, settings.morse, settings.morseTwice));
   log('', `вибрация ${morse.word(letters)} · ${morse.dashes(letters)}` + (sent ? '' : ' — браузер не пропустил'));
 }
 
@@ -711,6 +716,16 @@ document.addEventListener('visibilitychange', () => {
 
 /* --------------------------------------------------------------- настройки UI */
 
+function bindCheck(id, key, onApply) {
+  const input = $(id);
+  input.checked = settings[key];
+  input.addEventListener('change', () => {
+    settings[key] = input.checked;
+    saveSettings();
+    onApply?.();
+  });
+}
+
 function bindRange(id, key, format, onApply) {
   const input = $(id);
   const out = $(`${id}Val`);
@@ -744,23 +759,35 @@ function refreshClipHint() {
 // почувствует рука, — считаем и то и другое на живом имени: на последнем
 // распознанном, пока его нет — на «Queen».
 function refreshMorseHint() {
-  const test = $('testMorseBtn');
-  test.disabled = !settings.morse;
+  const secs = (ms) => `${(ms / 1000).toFixed(1)} с`;
+  $('testMorseBtn').disabled = !settings.morse;
+  $('setMorseTwice').disabled = !settings.morse;
+
   if (!settings.morse) {
     $('setMorseHint').textContent = 'Телефон молчит: ответ видно только на экране.';
+    $('setMorseTwiceHint').textContent = 'Повторять нечего — вибрация выключена.';
     stopBuzz(); // выключили посреди морзянки — она не должна доиграть
     return;
   }
-  const sample = buzzSample();
-  const letters = morse.spell(sample);
+
+  const letters = morse.spell(buzzSample());
+  const once = morse.totalMs(letters, settings.morse);
+  const twice = morse.totalMs(letters, settings.morse, true);
   const shown = letters.length
-    ? `«${morse.word(letters)}» → ${morse.dashes(letters)}, это ${(morse.totalMs(letters, settings.morse) / 1000).toFixed(1)} с. `
+    ? `«${morse.word(letters)}» → ${morse.dashes(letters)}, это ${secs(settings.morseTwice ? twice : once)}. `
     : '';
+
   $('setMorseHint').textContent =
     `Первые ${morse.MAX_CHARS} букв имени: точка ${settings.morse} мс, тире ${settings.morse * 3} мс. ${shown}` +
     `Только латиница: кириллица транслитерируется, цифра идёт первой буквой английского счёта (2 → T), ` +
     `пробелы и знаки выбрасываются. ` +
     `Вкладка при этом должна быть открыта на экране: вибрацию из фона не пропускает ни один браузер, а iPhone не умеет её вовсе.`;
+
+  // Цена повтора — не абстракция, а секунды, которые вибрация отнимет у
+  // следующего вопроса. Показываем обе длительности рядом, на живом имени.
+  $('setMorseTwiceHint').textContent =
+    'Второй проход добирает начало, если первое прозевали: ответ приходит без предупреждения. ' +
+    (letters.length ? `С повтором ${secs(twice)}, без него ${secs(once)}.` : 'Стоит ровно вдвое дольше.');
 }
 
 function initSettings() {
@@ -784,6 +811,9 @@ function initSettings() {
     if (session && (session.solved || !Number.isFinite(session.nextCheckAt))) scheduleRecheck(session);
   });
   bindRange('setMorse', 'morse', (v) => (v ? `точка ${v} мс` : 'выключена'), refreshMorseHint);
+  // Галочку меняют, чтобы услышать разницу, а не чтобы посмотреть на цифру:
+  // отстукиваем новый вариант сразу, как это делает кнопка проверки.
+  bindCheck('setMorseTwice', 'morseTwice', () => { refreshMorseHint(); buzzArtist(buzzSample()); });
   refreshClipHint();
   refreshMorseHint();
 

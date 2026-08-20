@@ -34,9 +34,24 @@ const DIGITS = {
   0: 'Z', 1: 'O', 2: 'T', 3: 'T', 4: 'F', 5: 'F', 6: 'S', 7: 'S', 8: 'E', 9: 'N',
 };
 
-// Международные пропорции: тире втрое длиннее точки, пауза внутри буквы равна
-// точке, между буквами — тире.
-const DOT = 1, DASH = 3, GAP_SYMBOL = 1, GAP_LETTER = 3;
+// Пропорции не международные: канонические 1 и 3 единицы пауз рассчитаны на ухо,
+// а мотор к концу сигнала ещё дотряхивает корпус, и на слитой паузе точка с тире
+// смазываются в один сигнал. Обе паузы удвоены — обе, а не одна: подними только
+// внутрибуквенную, и она сравняется с паузой между буквами, а вместе с ней
+// пропадёт единственный признак, по которому буквы вообще делятся.
+const DOT = 1, DASH = 3, GAP_SYMBOL = 2, GAP_LETTER = 6;
+
+// Имя можно отстучать дважды. Один проход легко упустить целиком: ответ приходит
+// без предупреждения, и пока рука сообразила, что телефон вибрирует, первые буквы
+// уже прошли. Второй проход — та же морзянка с начала, а не что-то новое, так что
+// упущенное начало добирается из него; платится за это ровно вдвое большим
+// временем, поэтому включается галочкой, а не молча.
+//
+// Пауза между проходами вдвое длиннее межбуквенной. Равной ей она быть не может:
+// повтор прочитался бы продолжением имени, и «QUEEN» на ощупь стало бы
+// десятибуквенным «QUEENQUEEN».
+const REPEATS = 2;
+const GAP_REPEAT = 14;
 
 /** Сколько букв стучим. Дальше вибрация дольше самого вопроса. */
 export const MAX_CHARS = 5;
@@ -72,23 +87,29 @@ export function spell(name, limit = MAX_CHARS) {
 
 /**
  * Массив для navigator.vibrate: [вибрация, пауза, вибрация, …] в миллисекундах.
- * Пять букв дают максимум четыре десятка значений — втрое меньше предела, на
- * котором браузеры обрезают шаблон.
+ * Пять букв дают в худшем случае, с повтором, восемь десятков значений — всё ещё
+ * меньше сотни, на которой браузеры обрезают шаблон.
  */
-export function pattern(letters, unitMs) {
-  const out = [];
+export function pattern(letters, unitMs, twice = false) {
+  const once = [];
   for (const { code } of letters) {
-    if (out.length) out.push(GAP_LETTER * unitMs);
+    if (once.length) once.push(GAP_LETTER * unitMs);
     for (let i = 0; i < code.length; i++) {
-      if (i) out.push(GAP_SYMBOL * unitMs);
-      out.push((code[i] === '-' ? DASH : DOT) * unitMs);
+      if (i) once.push(GAP_SYMBOL * unitMs);
+      once.push((code[i] === '-' ? DASH : DOT) * unitMs);
     }
+  }
+
+  const out = [];
+  for (let r = 0; r < (twice ? REPEATS : 1); r++) {
+    if (out.length) out.push(GAP_REPEAT * unitMs);
+    out.push(...once);
   }
   return out;
 }
 
-export function totalMs(letters, unitMs) {
-  return pattern(letters, unitMs).reduce((sum, ms) => sum + ms, 0);
+export function totalMs(letters, unitMs, twice = false) {
+  return pattern(letters, unitMs, twice).reduce((sum, ms) => sum + ms, 0);
 }
 
 /** «QUEEN» — что именно уйдёт в мотор, буквами. */
