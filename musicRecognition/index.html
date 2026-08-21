@@ -23,12 +23,26 @@
 </header>
 
 <main>
-  <!-- Управление -->
+  <!-- Управление. Единственный блок, который не сворачивается: кнопки нужны
+       в одно касание, а ключ и ошибка — это причина, по которой ничего не
+       происходит, и прятать её под спойлер значит прятать сам ответ. -->
   <section class="card control">
     <div class="control-row">
       <button class="btn btn--primary" id="toggleBtn">Empezar a escuchar</button>
       <button class="btn" id="blankBtn">Ocultar pantalla</button>
     </div>
+    <p class="notice" id="tokenNotice" hidden>
+      Hace falta su propia clave de AudD: créela en
+      <a href="https://dashboard.audd.io/" target="_blank" rel="noopener">dashboard.audd.io</a>
+      y péguela en «Ajustes», más abajo. La clave se guarda en este navegador y no se
+      envía a ningún sitio salvo al propio api.audd.io.
+    </p>
+    <p class="error" id="errorBox" hidden></p>
+  </section>
+
+  <!-- Как это работает -->
+  <details class="card about">
+    <summary>Cómo funciona</summary>
     <p class="hint">
       Escucha el micrófono y detecta por sí solo que ha empezado a sonar música.
       Sostenga el dispositivo de modo que se oigan los altavoces: importa más el
@@ -40,21 +54,12 @@
       ajustes. La pantalla se mantiene encendida; si se apagara, también callaría la
       vibración. Para volver, mantenga pulsado.
     </p>
-    <p class="notice" id="tokenNotice" hidden>
-      Hace falta su propia clave de AudD: créela en
-      <a href="https://dashboard.audd.io/" target="_blank" rel="noopener">dashboard.audd.io</a>
-      y péguela en «Ajustes», más abajo. La clave se guarda en este navegador y no se
-      envía a ningún sitio salvo al propio api.audd.io.
-    </p>
-    <p class="error" id="errorBox" hidden></p>
-  </section>
+  </details>
 
-  <!-- Живой монитор -->
-  <section class="card monitor" id="monitor" hidden>
-    <div class="monitor-head">
-      <h2>Qué se oye ahora</h2>
-      <span class="phase" id="phaseLabel">silencio</span>
-    </div>
+  <!-- Живой монитор. Фаза стоит в самой шапке: она одна и нужна на ходу,
+       а спектр с полосками смотрят, только когда что-то пошло не так. -->
+  <details class="card monitor" id="monitor" hidden>
+    <summary>Qué se oye ahora<span class="phase" id="phaseLabel">silencio</span></summary>
 
     <canvas id="spectrum" height="90" aria-label="Espectro del sonido entrante"></canvas>
 
@@ -78,32 +83,35 @@
     </div>
 
     <p class="readout" id="readout"></p>
-  </section>
+  </details>
 
-  <!-- Сейчас играет -->
-  <section class="card now" id="nowCard" hidden>
-    <div class="now-art">
-      <img id="nowArt" alt="" hidden>
-      <div class="now-art-empty" id="nowArtEmpty">♪</div>
+  <!-- Сейчас играет. В шапке остаётся только «сейчас» или «последний»:
+       само название — это ответ, и открывают его нарочно. -->
+  <details class="card now" id="nowCard" hidden>
+    <summary><span class="now-kicker" id="nowKicker">Sonando ahora</span></summary>
+    <div class="now-inner">
+      <div class="now-art">
+        <img id="nowArt" alt="" hidden>
+        <div class="now-art-empty" id="nowArtEmpty">♪</div>
+      </div>
+      <div class="now-body">
+        <h2 id="nowTitle">—</h2>
+        <p class="now-artist" id="nowArtist"></p>
+        <p class="now-meta" id="nowMeta"></p>
+        <div class="now-links" id="nowLinks"></div>
+      </div>
     </div>
-    <div class="now-body">
-      <span class="now-kicker" id="nowKicker">Sonando ahora</span>
-      <h2 id="nowTitle">—</h2>
-      <p class="now-artist" id="nowArtist"></p>
-      <p class="now-meta" id="nowMeta"></p>
-      <div class="now-links" id="nowLinks"></div>
-    </div>
-  </section>
+  </details>
 
   <!-- История -->
-  <section class="card history">
+  <details class="card history">
+    <summary>Historial</summary>
     <div class="history-head">
-      <h2>Historial</h2>
       <button class="btn btn--ghost btn--sm" id="clearHistoryBtn">Borrar</button>
     </div>
     <ol class="history-list" id="historyList"></ol>
     <p class="empty" id="historyEmpty">Todavía no se ha reconocido nada.</p>
-  </section>
+  </details>
 
   <!-- Настройки -->
   <details class="card settings">

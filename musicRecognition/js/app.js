@@ -861,16 +861,9 @@ function render() {
   rafId = requestAnimationFrame(render);
   if (document.hidden || blank || !features || !detector) return;
 
-  const pct = Math.round(features.score * 100);
-  el.scoreFill.style.width = `${pct}%`;
-  el.scoreValue.textContent = `${pct}%`;
-  el.scoreMark.style.left = `${settings.threshold * 100}%`;
-
-  for (const [name, node] of Object.entries(el.factors)) {
-    node.style.width = `${features[name] * 100}%`;
-    node.style.background = features[name] > 0.6 ? 'var(--accent)' : 'var(--muted)';
-  }
-
+  // Фаза стоит в шапке спойлера и видна, даже когда монитор свёрнут, — считаем
+  // её первой и всегда.
+  //
   // Пока стучит мотор, полоски и цифры под ними стоят на последнем услышанном
   // кадре. Без строки об этом замерший монитор читается как зависший.
   el.phase.textContent = deaf()
@@ -880,6 +873,23 @@ function render() {
       : session
         ? (session.solved ? 'canción identificada' : 'suena música, reuniendo el fragmento')
         : 'esperando música';
+
+  updateNowTimer();
+
+  // Под свёрнутым спойлером не видно ни полосок, ни спектра, ни строки приборов.
+  // Считать и рисовать их каждый кадр — та же работа впустую, что и отрисовка
+  // под чёрным экраном, и стоит она столько же.
+  if (!el.monitor.open) return;
+
+  const pct = Math.round(features.score * 100);
+  el.scoreFill.style.width = `${pct}%`;
+  el.scoreValue.textContent = `${pct}%`;
+  el.scoreMark.style.left = `${settings.threshold * 100}%`;
+
+  for (const [name, node] of Object.entries(el.factors)) {
+    node.style.width = `${features[name] * 100}%`;
+    node.style.background = features[name] > 0.6 ? 'var(--accent)' : 'var(--muted)';
+  }
 
   el.readout.textContent =
     `nivel ${features.rmsDb.toFixed(0)} dB · fondo ${features.floorDb.toFixed(0)} dB · ` +
@@ -891,7 +901,6 @@ function render() {
       : '');
 
   drawSpectrum();
-  updateNowTimer();
 }
 
 function drawSpectrum() {
