@@ -138,6 +138,9 @@ let inFlight = false;
 let requests = 0;
 let running = false;
 let wasWarmingUp = true;  // чтобы сообщить о замере фона ровно один раз
+// Пока мотор стучит морзянку, микрофон слушает мотор, а не комнату (см. «глухота»).
+let deafUntil = 0;       // до какого момента аудиочасов не слушаем
+let deafSec = 0;         // сколько всего не слушали — на это отстают часы приложения
 let wakeLock = null;
 let rafId = 0;
 let blank = false;       // экран скрыт, приложение работает
@@ -278,6 +281,10 @@ async function start() {
   session = null;
   running = true;
   wasWarmingUp = true;
+  // Аудиочасы у нового захвата начинаются с нуля — вместе с ними обнуляется
+  // и всё, что от них отсчитывается.
+  deafUntil = 0;
+  deafSec = 0;
 
   document.body.classList.add('is-running');
   el.monitor.hidden = false;
@@ -321,13 +328,74 @@ async function stop() {
   stopBuzz();
 }
 
+/* ------------------------------------------------------------------- глухота */
+
+// Мотор трясёт корпус, а микрофон — часть корпуса. Задумывалось, что вредить
+// этим нечему: детектор широкополосный дребезг за музыку не примет. На живом
+// телефоне вышло иначе — мотор слышно так, что мимо детектора он не проходит
+// вовсе, и оценка на нём не гасится, а скачет. Дальше уже неважно, в какую
+// сторону: скакнула вверх — гейт держит несуществующую музыку и морозит фон;
+// вниз — сессия рвётся посреди трека, а через пару секунд после морзянки
+// заводится новая, и тот же трек уходит в AudD ещё раз, отдельной записью
+// в истории. Порог паузы по умолчанию 2 секунды, морзянка идёт двенадцать.
+//
+// Поэтому на время морзянки приложение глохнет: кадр не доходит ни до
+// детектора, ни до гейта — ни как музыка, ни как тишина. Ничего не случилось,
+// просто этих секунд не было.
+//
+// Хвост нужен потому, что мотор останавливается не мгновенно: корпус ещё
+// звенит, а в окне анализатора лежат последние 2048 сэмплов — сорок с лишним
+// миллисекунд уже отзвучавшего.
+const BUZZ_TAIL_SEC = 0.5;
+
+/**
+ * Часы, по которым живут гейт и расписание запросов. От аудиочасов отличаются
+ * на всё время, что мы не слушали: иначе двенадцать секунд глухоты гейт
+ * прочитал бы как двенадцать секунд ровно того, что было перед ними, и
+ * размыкание — или, наоборот, начало сессии — наступило бы само собой, без
+ * единого честного кадра.
+ */
+function heard() {
+  return capture ? capture.audioTime - deafSec : 0;
+}
+
+/**
+ * Не слушать `ms` миллисекунд — столько, сколько стучит мотор. Возвращает,
+ * оглохли ли: когда микрофона нет вовсе, глохнуть не от чего и нечему.
+ */
+function deafen(ms) {
+  if (!capture) return false;
+  // Не max: navigator.vibrate обрывает прежний шаблон и начинает новый,
+  // так что глухота отсчитывается от этого мгновения, а не от старого конца.
+  deafUntil = capture.audioTime + ms / 1000 + BUZZ_TAIL_SEC;
+  return true;
+}
+
+/** Мотор смолк — дальше слушаем, дав корпусу дозвенеть. */
+function hearAgain() {
+  deafUntil = capture ? Math.min(deafUntil, capture.audioTime + BUZZ_TAIL_SEC) : 0;
+}
+
+function deaf() {
+  return Boolean(capture) && capture.audioTime < deafUntil;
+}
+
 /* --------------------------------------------------- кадр анализа и состояния */
 
 function onFrame({ analyser, samples }) {
   // Ворклет начинает слать звук ещё до того, как start() соберёт детектор.
   if (!detector || !gate) return;
-  features = detector.step(analyser, samples / capture.sampleRate, gate.playing);
-  const now = capture.audioTime;
+  const dt = samples / capture.sampleRate;
+
+  // В буфер кадр всё равно попал — его туда положил ворклет, до нас. Здесь он
+  // просто никого не касается: ни оценки, ни фона, ни расписания.
+  if (deaf()) {
+    deafSec += dt;
+    return;
+  }
+
+  features = detector.step(analyser, dt, gate.playing);
+  const now = heard();
 
   // Замер фона — исходная точка всей оценки: если он врёт, врёт и всё
   // остальное. В журнале должно быть видно, чем он кончился.
@@ -357,7 +425,7 @@ function onFrame({ analyser, samples }) {
 }
 
 function untilCheck() {
-  return Math.max(0, Math.round(session.nextCheckAt - capture.audioTime));
+  return Math.max(0, Math.round(session.nextCheckAt - heard()));
 }
 
 function startSession() {
@@ -381,7 +449,7 @@ function beginSegment(at) {
   session.segmentAt = at;
   // Часы стены по аудиочасам, а не Date.now(): кусок начался раньше, чем мы
   // это подтвердили, и в истории должно стоять его настоящее начало.
-  session.segmentAtWall = Date.now() - Math.max(0, capture.audioTime - at) * 1000;
+  session.segmentAtWall = Date.now() - Math.max(0, heard() - at) * 1000;
   session.solved = false;
   session.misses = 0;
   session.errors = 0;
@@ -394,7 +462,7 @@ function beginSegment(at) {
 // Промахнулись или узнали — дальше ждём либо разрыва в музыке, либо часов.
 // Бесконечность остаётся только там, где повторять нечего в принципе.
 function scheduleRecheck(s) {
-  s.nextCheckAt = settings.recheck ? capture.audioTime + settings.recheck : Infinity;
+  s.nextCheckAt = settings.recheck ? heard() + settings.recheck : Infinity;
 }
 
 function endSession() {
@@ -430,7 +498,18 @@ async function runRecognition() {
   // Считаем от начала куска, а не сессии: в склеенной сессии до него лежат
   // пауза и конец предыдущего вопроса, и в отпечатке им делать нечего.
   // На первых секундах куска берём только то, что успело прозвучать.
-  const seconds = Math.min(settings.clip, capture.audioTime - req.seg);
+  const seconds = Math.min(settings.clip, heard() - req.seg);
+
+  // Глухота спасает детектор, но не буфер: морзянку ворклет положил в него, как
+  // и всё остальное, и клип берётся с хвоста. Пока мотор из хвоста не вытек,
+  // отправлять нечего — ждём ровно столько, сколько его там осталось. Случай
+  // не теоретический: переспрос можно поставить на 5 секунд при фрагменте в 15.
+  const clean = capture.audioTime - deafUntil;
+  if (clean < seconds) {
+    s.nextCheckAt = heard() + (seconds - clean);
+    log('', `в буфере ещё вибрация, отправлю через ${Math.ceil(seconds - clean)} с`);
+    return;
+  }
 
   const clip = capture.makeClip(seconds);
   if (!clip) return;
@@ -467,7 +546,7 @@ async function runRecognition() {
         s.nextCheckAt = Infinity;
       } else if (s.errors < ERROR_RETRIES) {
         s.errors++;
-        s.nextCheckAt = capture.audioTime + ERROR_RETRY_SEC;
+        s.nextCheckAt = heard() + ERROR_RETRY_SEC;
         log('warn', `повтор через ${ERROR_RETRY_SEC} с`);
       } else {
         scheduleRecheck(s);
@@ -521,7 +600,7 @@ function handleNoMatch(req) {
   const { s } = req;
   if (s.misses < MISS_RETRIES) {
     s.misses++;
-    s.nextCheckAt = capture.audioTime + MISS_RETRY_SEC;
+    s.nextCheckAt = heard() + MISS_RETRY_SEC;
     log('', `попробую другой фрагмент через ${MISS_RETRY_SEC} с`);
   } else {
     // Три промаха подряд по разным фрагментам — это уже не «взяли не тот
@@ -556,9 +635,8 @@ function makeEntry(result, key, req) {
 // телефон лежит экраном вниз или в кармане. Имя исполнителя стучится морзянкой,
 // и ответ узнаётся, не доставая телефон.
 //
-// Мотор слышно микрофоном, но вредить этим нечему: фрагмент к этому моменту уже
-// отправлен, а детектор дребезг корпуса за музыку не примет — он широкополосный,
-// плоскостность у него выше flatnessVeto, и оценка от него гасится, а не растёт.
+// Мотор слышно микрофоном, и слышно сильно: на время морзянки приложение
+// глохнет целиком, см. «глухота» выше.
 let vibrationWarned = false;
 
 // `secret` — тренировка: имя загадано, и в журнале ему не место. Сама строка
@@ -585,15 +663,26 @@ function buzzArtist(artist, { secret = false } = {}) {
 
   // Вибрация в скрытой вкладке отбрасывается — это не наша ошибка, но и не
   // «всё сработало»: без строки в журнале молчащий телефон не объяснить.
-  const sent = navigator.vibrate(morse.pattern(letters, timing()));
+  const buzz = morse.pattern(letters, timing());
+  const ms = buzz.reduce((sum, v) => sum + v, 0);
+  const sent = navigator.vibrate(buzz);
+  // Глохнем ровно на то, что мотор действительно стучит: шаблон, который
+  // браузер не пропустил, корпус не трясёт, и глохнуть на него не за что.
+  const wentDeaf = sent && deafen(ms);
   const what = secret
     ? `вслепую, ${letters.length} ${plural(letters.length, 'буква', 'буквы', 'букв')}`
     : readout(letters);
-  log('', `вибрация ${what}` + (sent ? '' : ' — браузер не пропустил'));
+  // Глухота стоит распознавания и потому попадает в журнал: замерший монитор
+  // и отложенная проверка иначе выглядят сбоем, а не платой за ответ на ощупь.
+  const tail = !sent ? ' — браузер не пропустил'
+    : wentDeaf ? `, не слушаю ${(ms / 1000).toFixed(1)} с`
+    : '';
+  log('', `вибрация ${what}${tail}`);
 }
 
 function stopBuzz() {
   navigator.vibrate?.(0);
+  hearAgain();
 }
 
 // Из настроек морзянка берёт не только длительности, но и саму азбуку: сколько
@@ -785,11 +874,15 @@ function render() {
     node.style.background = features[name] > 0.6 ? 'var(--accent)' : 'var(--muted)';
   }
 
-  el.phase.textContent = features.warmingUp
-    ? 'меряю фон комнаты'
-    : session
-      ? (session.solved ? 'трек определён' : 'музыка играет, собираю фрагмент')
-      : 'жду музыку';
+  // Пока стучит мотор, полоски и цифры под ними стоят на последнем услышанном
+  // кадре. Без строки об этом замерший монитор читается как зависший.
+  el.phase.textContent = deaf()
+    ? 'вибрация — микрофон не в счёт'
+    : features.warmingUp
+      ? 'меряю фон комнаты'
+      : session
+        ? (session.solved ? 'трек определён' : 'музыка играет, собираю фрагмент')
+        : 'жду музыку';
 
   el.readout.textContent =
     `уровень ${features.rmsDb.toFixed(0)} дБ · фон ${features.floorDb.toFixed(0)} дБ · ` +
@@ -797,7 +890,7 @@ function render() {
     `плоскостность ${features.flatness.toFixed(3)} · ` +
     `бас ${(features.bassRatio * 100).toFixed(0)}% · верх ${(features.highRatio * 100).toFixed(0)}%` +
     (session && Number.isFinite(session.nextCheckAt)
-      ? ` · след. проверка через ${Math.max(0, Math.round(session.nextCheckAt - capture.audioTime))} с`
+      ? ` · след. проверка через ${Math.max(0, Math.round(session.nextCheckAt - heard()))} с`
       : '');
 
   drawSpectrum();
