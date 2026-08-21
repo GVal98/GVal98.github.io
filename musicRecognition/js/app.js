@@ -173,7 +173,7 @@ function saveHistory() {
 /* ------------------------------------------------------------------- утилиты */
 
 function clock(ms) {
-  return new Date(ms).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  return new Date(ms).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
 }
 function dur(sec) {
   const s = Math.max(0, Math.round(sec));
@@ -190,7 +190,7 @@ function clipLink(blob) {
   a.className = 'log-clip';
   a.href = URL.createObjectURL(blob);
   a.download = `clip-${clock(Date.now()).replace(':', '')}.wav`;
-  a.textContent = 'скачать';
+  a.textContent = 'descargar';
   clipLinks.push(a);
   while (clipLinks.length > CLIPS_KEPT) {
     const old = clipLinks.shift();
@@ -220,17 +220,17 @@ function setStatus(kind, text) {
   el.status.textContent = text;
 }
 function refreshStatus() {
-  if (!running) return setStatus('idle', 'Остановлено');
-  if (inFlight) return setStatus('busy', 'Распознаю…');
-  if (gate?.playing) return setStatus('music', 'Играет музыка');
-  setStatus('listen', 'Слушаю');
+  if (!running) return setStatus('idle', 'Detenido');
+  if (inFlight) return setStatus('busy', 'Reconociendo…');
+  if (gate?.playing) return setStatus('music', 'Suena música');
+  setStatus('listen', 'Escuchando');
 }
 
 /* ------------------------------------------------------------- запуск / стоп */
 
 /** Без ключа слушать бессмысленно — ведём к полю, а не молча падаем на первом запросе. */
 function promptForToken() {
-  showError('Сначала вставьте ключ AudD в настройках.');
+  showError('Primero pegue la clave de AudD en los ajustes.');
   document.querySelector('.settings').open = true;
   const input = $('setToken');
   input.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -248,9 +248,9 @@ async function start() {
   el.blankBtn.disabled = true;
   // Пока браузер показывает запрос доступа, промис висит без единого признака
   // жизни в интерфейсе — говорим, чего ждём.
-  setStatus('busy', 'Жду доступ к микрофону…');
+  setStatus('busy', 'Esperando acceso al micrófono…');
   capture = new AudioCapture({ bufferSeconds: BUFFER_SECONDS, onFrame });
-  capture.onTrackEnded = () => { log('warn', 'микрофон отключён'); stop(); };
+  capture.onTrackEnded = () => { log('warn', 'micrófono desconectado'); stop(); };
 
   try {
     await capture.start();
@@ -263,11 +263,11 @@ async function start() {
     el.toggle.disabled = false;
     el.blankBtn.disabled = false;
     showError(
-      e.name === 'NotAllowedError' ? 'Доступ к микрофону не разрешён. Разрешите его в адресной строке и попробуйте снова.'
-      : e.name === 'NotFoundError' ? 'Не найден микрофон.'
-      : e.message || 'Не удалось получить звук с микрофона.'
+      e.name === 'NotAllowedError' ? 'No se ha permitido el acceso al micrófono. Concédalo en la barra de direcciones y vuelva a intentarlo.'
+      : e.name === 'NotFoundError' ? 'No se ha encontrado ningún micrófono.'
+      : e.message || 'No se ha podido obtener el sonido del micrófono.'
     );
-    setStatus('error', 'Ошибка');
+    setStatus('error', 'Error');
     return;
   }
 
@@ -290,10 +290,10 @@ async function start() {
   el.monitor.hidden = false;
   el.toggle.disabled = false;
   el.blankBtn.disabled = false;
-  el.toggle.textContent = 'Остановить';
+  el.toggle.textContent = 'Detener';
   el.toggle.classList.replace('btn--primary', 'btn--stop');
   refreshStatus();
-  log('ok', `слушаю микрофон, ${capture.sampleRate} Гц`);
+  log('ok', `escuchando el micrófono, ${capture.sampleRate} Hz`);
 
   requestWakeLock();
   rafId = requestAnimationFrame(render);
@@ -311,17 +311,17 @@ async function stop() {
   features = null;
 
   document.body.classList.remove('is-running', 'is-music');
-  el.toggle.textContent = 'Начать слушать';
+  el.toggle.textContent = 'Empezar a escuchar';
   el.toggle.classList.replace('btn--stop', 'btn--primary');
   el.toggle.disabled = false;
   el.blankBtn.disabled = false;
-  el.phase.textContent = 'остановлено';
+  el.phase.textContent = 'detenido';
   refreshStatus();
   releaseWakeLock();
   // Скрытый экран пустой ровно потому, что за ним всё работает. Когда работать
   // перестало — от микрофона до самой вкладки, — держать заливку значит показывать
   // ровно то же самое чёрное поле вместо причины, по которой всё смолкло.
-  exitBlank('слушать перестали — вернул экран');
+  exitBlank('se ha dejado de escuchar: pantalla restaurada');
   // Нажали «Остановить» посреди морзянки — дослушивать её незачем, распознавание
   // уже выключено. Тем более при уходе со страницы: там шаблон пережил бы саму
   // вкладку и телефон продолжил бы стучать в пустоту.
@@ -402,9 +402,9 @@ function onFrame({ analyser, samples }) {
   if (wasWarmingUp && !features.warmingUp) {
     wasWarmingUp = false;
     if (features.startedInMusic) {
-      log('warn', `при запуске уже что-то играло — фон не измерен, принят ${features.floorDb.toFixed(0)} дБ`);
+      log('warn', `al arrancar ya sonaba algo: el fondo no se ha medido, se toma ${features.floorDb.toFixed(0)} dB`);
     } else {
-      log('', `фон комнаты ${features.floorDb.toFixed(0)} дБ`);
+      log('', `ruido de fondo de la sala ${features.floorDb.toFixed(0)} dB`);
     }
   }
 
@@ -416,7 +416,7 @@ function onFrame({ analyser, samples }) {
   // уже другой, и спрашивать про него надо заново.
   else if (session && gate.segmentAt !== null && gate.segmentAt !== session.segmentAt) {
     beginSegment(gate.segmentAt);
-    log('', `музыка прервалась и пошла снова, отправлю через ${untilCheck()} с`);
+    log('', `la música se ha cortado y ha vuelto, envío dentro de ${untilCheck()} s`);
   }
 
   if (session && !inFlight && now >= session.nextCheckAt) {
@@ -436,7 +436,7 @@ function startSession() {
   beginSegment(gate.segmentAt ?? gate.startedAt);
   document.body.classList.add('is-music');
   refreshStatus();
-  log('', `музыка началась, отправлю через ${untilCheck()} с`);
+  log('', `ha empezado la música, envío dentro de ${untilCheck()} s`);
 }
 
 /**
@@ -471,7 +471,7 @@ function endSession() {
   document.body.classList.remove('is-music');
   refreshStatus();
   renderNow();
-  log('', 'музыка смолкла');
+  log('', 'la música ha cesado');
 }
 
 function closeEntry(entry, at = Date.now()) {
@@ -507,7 +507,7 @@ async function runRecognition() {
   const clean = capture.audioTime - deafUntil;
   if (clean < seconds) {
     s.nextCheckAt = heard() + (seconds - clean);
-    log('', `в буфере ещё вибрация, отправлю через ${Math.ceil(seconds - clean)} с`);
+    log('', `todavía hay vibración en el búfer, envío dentro de ${Math.ceil(seconds - clean)} s`);
     return;
   }
 
@@ -516,7 +516,7 @@ async function runRecognition() {
 
   inFlight = true;
   refreshStatus();
-  log('', `отправляю ${clip.seconds.toFixed(1)} с (${Math.round(clip.blob.size / 1024)} КБ)`, clip.blob);
+  log('', `enviando ${clip.seconds.toFixed(1)} s (${Math.round(clip.blob.size / 1024)} kB)`, clip.blob);
 
   try {
     // Без таймаута повисший fetch держит inFlight до собственного таймаута
@@ -526,28 +526,28 @@ async function runRecognition() {
       signal: AbortSignal.timeout?.(REQUEST_TIMEOUT * 1000),
     });
     requests++;
-    el.counter.textContent = `${requests} ${plural(requests, 'запрос', 'запроса', 'запросов')}`;
+    el.counter.textContent = `${requests} ${plural(requests, 'solicitud', 'solicitudes')}`;
     if (result) handleMatch(result, req);
     else handleNoMatch(req);
   } catch (e) {
     log('err',
       e instanceof AudDError ? `AudD: ${e.message}`
-      : e.name === 'TimeoutError' ? `AudD не ответил за ${REQUEST_TIMEOUT} с`
-      : `Сеть: ${e.message}`);
+      : e.name === 'TimeoutError' ? `AudD no ha respondido en ${REQUEST_TIMEOUT} s`
+      : `Red: ${e.message}`);
     // Неверный ключ и исчерпанный лимит сами не рассосутся — повторять их
     // значит просто выкидывать клипы в пустоту до конца раунда.
     const fatal = e instanceof AudDError && (e.code === 900 || e.code === 901);
     showError(fatal ? e.message : '');
     // Ключ не работает или лимит выбран: запросов больше не будет, а на скрытом
     // экране это неотличимо от тишины в зале. Показываем, в чём дело.
-    if (fatal) exitBlank('AudD отказал — вернул экран');
+    if (fatal) exitBlank('AudD ha rechazado la solicitud: pantalla restaurada');
     if (req.live()) {
       if (fatal) {
         s.nextCheckAt = Infinity;
       } else if (s.errors < ERROR_RETRIES) {
         s.errors++;
         s.nextCheckAt = heard() + ERROR_RETRY_SEC;
-        log('warn', `повтор через ${ERROR_RETRY_SEC} с`);
+        log('warn', `reintento dentro de ${ERROR_RETRY_SEC} s`);
       } else {
         scheduleRecheck(s);
       }
@@ -566,7 +566,7 @@ function handleMatch(result, req) {
   // внутри трека — на тихом проигрыше, на смене части. Тогда ответ придёт тот
   // же самый, и заводить на него вторую запись в истории не за что.
   if (s.entry && s.entry.key === key) {
-    log('ok', `всё ещё «${result.title}»`);
+    log('ok', `sigue siendo «${result.title}»`);
   } else {
     // Прошлый трек кончился на границе куска, а не сейчас: иначе его
     // длительность вобрала бы и паузу, и начало этого.
@@ -595,13 +595,13 @@ function handleMatch(result, req) {
 }
 
 function handleNoMatch(req) {
-  log('warn', 'совпадений нет');
+  log('warn', 'sin coincidencias');
   if (!req.live()) return;
   const { s } = req;
   if (s.misses < MISS_RETRIES) {
     s.misses++;
     s.nextCheckAt = heard() + MISS_RETRY_SEC;
-    log('', `попробую другой фрагмент через ${MISS_RETRY_SEC} с`);
+    log('', `probaré con otro fragmento dentro de ${MISS_RETRY_SEC} s`);
   } else {
     // Три промаха подряд по разным фрагментам — это уже не «взяли не тот
     // кусок», а трек, которого в базе AudD нет. Дальше только по часам.
@@ -616,7 +616,7 @@ function makeEntry(result, key, req) {
   return {
     id: `${Date.now()}-${Math.round(performance.now())}`,
     key,
-    title: result.title || 'Без названия',
+    title: result.title || 'Sin título',
     artist: result.artist || '',
     album: result.album || '',
     label: result.label || '',
@@ -649,15 +649,15 @@ function buzzArtist(artist, { secret = false } = {}) {
     // забился бы одинаковыми строками на каждый трек.
     if (!vibrationWarned) {
       vibrationWarned = true;
-      log('warn', 'браузер не умеет вибрацию — на iPhone её нет вовсе');
+      log('warn', 'el navegador no admite la vibración; en el iPhone no existe en absoluto');
     }
     return;
   }
 
   const letters = spell(artist);
   if (!letters.length) {
-    log('', secret ? 'загаданное имя нечем отстучать'
-      : artist ? `«${artist}» нечем отстучать` : 'исполнитель неизвестен, вибрации не будет');
+    log('', secret ? 'no hay nada que marcar del nombre pensado'
+      : artist ? `«${artist}» no tiene nada que marcar` : 'artista desconocido, no habrá vibración');
     return;
   }
 
@@ -670,14 +670,14 @@ function buzzArtist(artist, { secret = false } = {}) {
   // браузер не пропустил, корпус не трясёт, и глохнуть на него не за что.
   const wentDeaf = sent && deafen(ms);
   const what = secret
-    ? `вслепую, ${letters.length} ${plural(letters.length, 'буква', 'буквы', 'букв')}`
+    ? `a ciegas, ${letters.length} ${plural(letters.length, 'letra', 'letras')}`
     : readout(letters);
   // Глухота стоит распознавания и потому попадает в журнал: замерший монитор
   // и отложенная проверка иначе выглядят сбоем, а не платой за ответ на ощупь.
-  const tail = !sent ? ' — браузер не пропустил'
-    : wentDeaf ? `, не слушаю ${(ms / 1000).toFixed(1)} с`
+  const tail = !sent ? ' — el navegador no la ha dejado pasar'
+    : wentDeaf ? `, sin escuchar durante ${(ms / 1000).toFixed(1)} s`
     : '';
-  log('', `вибрация ${what}${tail}`);
+  log('', `vibración ${what}${tail}`);
 }
 
 function stopBuzz() {
@@ -770,9 +770,9 @@ function renderTraining() {
   answer.classList.toggle('is-waiting', !training.shown);
   code.textContent = '';
 
-  if (off) { answer.textContent = 'Вибрация выключена — тренировать нечего.'; return; }
-  if (!training.name) { answer.textContent = 'Имя ещё не загадано.'; return; }
-  if (!training.shown) { answer.textContent = 'Имя загадано. Стучать его можно сколько угодно раз.'; return; }
+  if (off) { answer.textContent = 'La vibración está desactivada: no hay nada que entrenar.'; return; }
+  if (!training.name) { answer.textContent = 'Todavía no se ha pensado ningún nombre.'; return; }
+  if (!training.shown) { answer.textContent = 'Nombre pensado. Puede marcarlo tantas veces como quiera.'; return; }
 
   // Показываем и имя целиком, и то, что от него дошло до мотора: разошлись они
   // ещё до вибрации — артикль снят, буквы упрощены, лишнее отрезано, — и без
@@ -782,11 +782,8 @@ function renderTraining() {
   code.textContent = letters.length ? readout(letters) : '';
 }
 
-function plural(n, one, few, many) {
-  const m = n % 100;
-  if (m >= 11 && m <= 14) return many;
-  const k = n % 10;
-  return k === 1 ? one : k >= 2 && k <= 4 ? few : many;
+function plural(n, one, many) {
+  return n === 1 ? one : many;
 }
 
 /* ------------------------------------------------------------------- отрисовка */
@@ -796,7 +793,7 @@ function renderNow(fresh = false) {
   el.now.hidden = false;
 
   const live = session?.entry?.id === current.id;
-  el.nowKicker.textContent = live ? 'Сейчас играет' : 'Последний трек';
+  el.nowKicker.textContent = live ? 'Sonando ahora' : 'Última canción';
 
   if (current.art) {
     el.nowArt.src = current.art;
@@ -833,7 +830,7 @@ function updateNowTimer() {
   const live = session?.entry?.id === current.id;
   const end = live ? Date.now() : (current.endWall ?? current.recognizedWall);
   const played = (end - current.startWall) / 1000;
-  const tail = live ? `играет ${dur(played)}` : `${clock(current.startWall)} · ${dur(played)}`;
+  const tail = live ? `sonando ${dur(played)}` : `${clock(current.startWall)} · ${dur(played)}`;
   const base = el.nowMeta.dataset.base;
   el.nowMeta.textContent = base ? `${base} · ${tail}` : tail;
 }
@@ -877,20 +874,20 @@ function render() {
   // Пока стучит мотор, полоски и цифры под ними стоят на последнем услышанном
   // кадре. Без строки об этом замерший монитор читается как зависший.
   el.phase.textContent = deaf()
-    ? 'вибрация — микрофон не в счёт'
+    ? 'vibración: el micrófono no cuenta'
     : features.warmingUp
-      ? 'меряю фон комнаты'
+      ? 'midiendo el ruido de la sala'
       : session
-        ? (session.solved ? 'трек определён' : 'музыка играет, собираю фрагмент')
-        : 'жду музыку';
+        ? (session.solved ? 'canción identificada' : 'suena música, reuniendo el fragmento')
+        : 'esperando música';
 
   el.readout.textContent =
-    `уровень ${features.rmsDb.toFixed(0)} дБ · фон ${features.floorDb.toFixed(0)} дБ · ` +
-    `превышение ${features.snr.toFixed(0)} дБ · размах ${features.dynamicsDb.toFixed(1)} дБ · ` +
-    `плоскостность ${features.flatness.toFixed(3)} · ` +
-    `бас ${(features.bassRatio * 100).toFixed(0)}% · верх ${(features.highRatio * 100).toFixed(0)}%` +
+    `nivel ${features.rmsDb.toFixed(0)} dB · fondo ${features.floorDb.toFixed(0)} dB · ` +
+    `exceso ${features.snr.toFixed(0)} dB · rango ${features.dynamicsDb.toFixed(1)} dB · ` +
+    `planitud ${features.flatness.toFixed(3)} · ` +
+    `graves ${(features.bassRatio * 100).toFixed(0)}% · agudos ${(features.highRatio * 100).toFixed(0)}%` +
     (session && Number.isFinite(session.nextCheckAt)
-      ? ` · след. проверка через ${Math.max(0, Math.round(session.nextCheckAt - heard()))} с`
+      ? ` · próxima comprobación en ${Math.max(0, Math.round(session.nextCheckAt - heard()))} s`
       : '');
 
   drawSpectrum();
@@ -990,10 +987,10 @@ async function enterBlank() {
   // просто пустая страница — ради неё всё и затевалось.
   try { await document.documentElement.requestFullscreen?.({ navigationUI: 'hide' }); }
   catch { /* отказ полноэкранного режима заливке не мешает */ }
-  log('', 'экран скрыт — слушаю дальше');
+  log('', 'pantalla oculta: sigo escuchando');
 }
 
-function exitBlank(why = 'экран возвращён') {
+function exitBlank(why = 'pantalla restaurada') {
   if (!blank) return;
   blank = false;
   cancelHold();
@@ -1016,11 +1013,11 @@ function setThemeColor(color) {
 // способ отличить работающий чёрный экран от погасшего телефона, не выходя
 // из режима: коснулся, прочитал, отпустил.
 function blankStatus() {
-  const state = !running ? 'остановлено'
-    : inFlight ? 'распознаю'
-    : gate?.playing ? 'играет музыка'
-    : 'слушаю';
-  const last = current ? `${current.artist} — ${current.title}` : 'пока ничего не распознано';
+  const state = !running ? 'detenido'
+    : inFlight ? 'reconociendo'
+    : gate?.playing ? 'suena música'
+    : 'escuchando';
+  const last = current ? `${current.artist} — ${current.title}` : 'todavía no se ha reconocido nada';
   return `${state} · ${last}`;
 }
 
@@ -1104,9 +1101,9 @@ function applyGate() {
 function refreshClipHint() {
   const at = settings.clip + LEAD_IN;
   $('setClipHint').textContent =
-    `Отправка на ${at}-й секунде трека, фрагмент с ${LEAD_IN}-й по ${at}-ю. ` +
-    `Если трек короче ${at} с, в отпечаток попадёт пауза после него. ` +
-    `AudD увереннее всего работает от 10 с — но столько есть не на каждом треке.`;
+    `El envío se hace en el segundo ${at} de la canción; el fragmento va del segundo ${LEAD_IN} al ${at}. ` +
+    `Si la canción dura menos de ${at} s, en la huella entrará la pausa que viene después. ` +
+    `AudD trabaja con más seguridad a partir de 10 s, pero no toda canción los tiene.`;
 }
 
 // Ползунков у морзянки шесть, и почти все считаются друг от друга: паузы кратны
@@ -1117,7 +1114,7 @@ let morseSyncs = [];
 
 function refreshMorseHint() {
   const dot = settings.morse;
-  const secs = (ms) => `${(ms / 1000).toFixed(1)} с`;
+  const secs = (ms) => `${(ms / 1000).toFixed(1)} s`;
   const letters = spell();
   const off = !dot;
 
@@ -1132,8 +1129,8 @@ function refreshMorseHint() {
   renderTraining();
 
   if (off) {
-    $('setMorseHint').textContent = 'Телефон молчит: ответ видно только на экране.';
-    $('setMorseTwiceHint').textContent = 'Повторять нечего — вибрация выключена.';
+    $('setMorseHint').textContent = 'El teléfono calla: la respuesta solo se ve en la pantalla.';
+    $('setMorseTwiceHint').textContent = 'No hay nada que repetir: la vibración está desactivada.';
     for (const id of ['setMorseLettersHint', 'setMorseSimpleHint', 'setMorseGapSymHint',
                       'setMorseGapLetterHint', 'setMorseMarkHint', 'setMorseGapRepeatHint']) {
       $(id).textContent = '';
@@ -1152,75 +1149,75 @@ function refreshMorseHint() {
   const repeatMs = twice - once;
   const shown = letters.length
     ? `«${morse.word(letters, settings.morseMark)}» → ${morse.dashes(letters, settings.morseMark)}, ` +
-      `это ${secs(settings.morseTwice ? twice : once)}. `
+      `son ${secs(settings.morseTwice ? twice : once)}. `
     : '';
 
   $('setMorseHint').textContent =
-    `${shown}От точки считается всё остальное — и тире, и паузы, — так что этим ползунком меняется общая скорость. ` +
-    `Ниже 60 мс мотор не успевает раскрутиться и остановиться, и точка с тире сливаются. ` +
-    `Вкладка при этом должна быть открыта на экране: вибрацию из фона не пропускает ни один браузер, а iPhone не умеет её вовсе.`;
+    `${shown}Desde el punto se calcula todo lo demás —la raya y las pausas—, así que este control cambia la velocidad general. ` +
+    `Por debajo de 60 ms el motor no llega a arrancar y detenerse, y el punto y la raya se funden. ` +
+    `Además, la pestaña debe estar abierta en pantalla: ningún navegador deja pasar la vibración desde segundo plano, y el iPhone no la admite en absoluto.`;
 
   $('setMorseLettersHint').textContent =
-    `Только латиница: кириллица транслитерируется, цифра идёт первой буквой английского счёта (2 → T), ` +
-    `пробелы и знаки выбрасываются, а артикль The в начале имени не стучится вовсе — три буквы из пяти ` +
-    `он забирал бы себе, а различал бы ими ничего. Каждая лишняя буква — это ещё ${secs(perLetterMs())} вибрации.`;
+    `Solo alfabeto latino: el cirílico se translitera, cada cifra pasa a ser la primera letra de su nombre en inglés (2 → T), ` +
+    `los espacios y los signos se descartan, y el artículo The al principio del nombre no se marca en absoluto: se llevaría ` +
+    `tres de las cinco letras sin distinguir nada con ellas. Cada letra de más son ${secs(perLetterMs())} más de vibración.`;
 
   // Что именно упрощение сделало с этим именем, видно только рядом с полной
   // азбукой: «KUIN» сам по себе выглядит опечаткой, а не заменой.
   const full = morse.spell(buzzSample(), settings.morseLetters);
-  const pairs = morse.simplePairs().map(({ from, to }) => `${from.join(' и ')} → ${to}`).join(', ');
+  const pairs = morse.simplePairs().map(({ from, to }) => `${from.join(' y ')} → ${to}`).join(', ');
   // Короче — почти всегда, но не по определению: тире и пауза внутри буквы
   // задаются отдельно, и на длинном тире с короткой паузой ·−− (W) успевает
   // обогнать ···− (V). Поэтому не обещаем, а считаем.
   const saved = morse.totalMs(full, timing()) - morse.totalMs(letters, timing());
-  const delta = Math.abs(saved) < 50 ? '' : `, на ${secs(Math.abs(saved))} ${saved > 0 ? 'короче' : 'длиннее'}`;
+  const delta = Math.abs(saved) < 50 ? '' : `, ${secs(Math.abs(saved))} más ${saved > 0 ? 'corto' : 'largo'}`;
   $('setMorseSimpleHint').textContent =
-    `Пять букв, у которых нет своего звука, заменяются теми, что звучат за них: ${pairs}. ` +
-    `Шестая, C, читается по соседу, как в английском: перед E, I и Y это S («City» → SITI), ` +
-    `иначе K («Coldplay» → KOLDPLAI); CH — это SH. ` +
-    `Сдвоенные буквы схлопываются в одну: в моторе это два одинаковых кода подряд, и отличить их ` +
-    `от одного можно только по длине паузы между ними — «Iggy» → IGI, «Black» → BLAK. ` +
-    `Пара EE — это I, без исключений: «Queen» → KUIN, «Green Day» → GRIND. ` +
-    `Пара EA — тот же I («The Beatles» → BITLE), но кроме EAR, EAD и EATH: «Pearl Jam» остаётся собой. ` +
-    `Пара TH — это T: звук в ней один и в именах почти всегда глухой («Thunder» → TUNDE, «Anthrax» → ANTRA), ` +
-    `а H — самый дорогой знак, какой вообще можно снять, четыре точки да три паузы внутри буквы. ` +
-    `Пара PH — это F: тот же звук, а код на две точки короче, чем у P («Phish» → FISH, «Aphex Twin» → AFEXT). ` +
-    `Границу слова ни одно правило не переходит — читается-то слово, а не имя: «Hip Hop» так и уходит HIPHO, ` +
-    `«Eric Clapton» — ERIKK, двумя K из разных слов. ` +
-    `Кодов остаётся двадцать вместо двадцати шести, и все шесть были четырёхзначными — ` +
-    `имя пишется с ошибкой, зато на ощупь в нём меньше знаков, которые можно потерять. ` +
-    `Короче оно при этом не всегда: освободившееся место достаётся следующему звуку, и пятёрка добирается дальше в имя. ` +
+    `Las cinco letras que no tienen sonido propio se sustituyen por las que suenan en su lugar: ${pairs}. ` +
+    `La sexta, la C, se lee según su vecina, como en inglés: ante E, I e Y es S («City» → SITI) ` +
+    `y, si no, K («Coldplay» → KOLDPLAI); CH es SH. ` +
+    `Las letras dobles se colapsan en una: en el motor son dos códigos iguales seguidos, y distinguirlos ` +
+    `de uno solo depende únicamente de la duración de la pausa entre ambos — «Iggy» → IGI, «Black» → BLAK. ` +
+    `El par EE es I, sin excepciones: «Queen» → KUIN, «Green Day» → GRIND. ` +
+    `El par EA es también I («The Beatles» → BITLE), salvo en EAR, EAD y EATH: «Pearl Jam» se queda como está. ` +
+    `El par TH es T: su sonido es uno solo y en los nombres casi siempre sordo («Thunder» → TUNDE, «Anthrax» → ANTRA), ` +
+    `y la H es el signo más caro que se puede quitar: cuatro puntos y tres pausas dentro de la letra. ` +
+    `El par PH es F: el mismo sonido, con un código dos puntos más corto que el de la P («Phish» → FISH, «Aphex Twin» → AFEXT). ` +
+    `Ninguna regla cruza el límite de palabra, porque lo que se lee es la palabra y no el nombre entero: «Hip Hop» sale tal cual HIPHO, ` +
+    `y «Eric Clapton», ERIKK, con dos K de palabras distintas. ` +
+    `Quedan veinte códigos en vez de veintiséis, y los seis que se van eran de cuatro signos: ` +
+    `el nombre queda mal escrito, pero al tacto tiene menos signos que se puedan perder. ` +
+    `Y no siempre sale más corto: el hueco que se libera pasa al sonido siguiente, y las cinco letras llegan más adentro del nombre. ` +
     (!settings.morseSimple
-      ? 'Сейчас имя уходит полной азбукой, всеми двадцатью шестью кодами.'
+      ? 'Ahora el nombre se envía con el alfabeto completo, con los veintiséis códigos.'
       : !letters.length
         ? ''
         : morse.word(full) !== morse.word(letters)
-          ? `«${morse.word(full)}» уходит в мотор как «${morse.word(letters)}»${delta}.`
-          : `В «${morse.word(letters)}» заменять нечего — на ощупь ничего не изменится.`);
+          ? `«${morse.word(full)}» llega al motor como «${morse.word(letters)}»${delta}.`
+          : `En «${morse.word(letters)}» no hay nada que sustituir: al tacto no cambia nada.`);
 
   $('setMorseMarkHint').textContent =
-    `Перед именем стучится всегда одна и та же буква — ${morse.MARK.char}, это ${morse.dashes([morse.MARK])}, — ` +
-    `и пауза стыка после неё. Ответ приходит без предупреждения: пока рука сообразила, что телефон вибрирует, ` +
-    `первая буква имени уже прошла. Метка забирает этот момент себе — пропускают её, а не начало ответа. ` +
-    `Буквой имени она при этом не считается и в отмеренные ${settings.morseLetters} ` +
-    `${plural(settings.morseLetters, 'букву', 'буквы', 'букв')} не входит. ` +
-    `Буква взята O, хотя S короче на четыре точки: метка перед именем, которое начинается с той же буквы, ` +
-    `даёт два одинаковых кода подряд, а из двух сотен канона с S начинаются 22 имени, с O — пять. ` +
-    `Стоит она ${secs(markMs)} в каждом проходе — против ${secs(repeatMs)} за второй проход того же имени.` +
-    (settings.morseMark ? '' : ' Сейчас имя начинается сразу со своей первой буквы.');
+    `Antes del nombre se marca siempre la misma letra —${morse.MARK.char}, es decir ${morse.dashes([morse.MARK])}— ` +
+    `y tras ella la pausa de separación. La respuesta llega sin avisar: para cuando la mano se da cuenta de que el teléfono vibra, ` +
+    `la primera letra del nombre ya ha pasado. La marca se queda con ese momento: lo que se pierde es ella y no el principio de la respuesta. ` +
+    `Además no cuenta como letra del nombre y no entra en las ${settings.morseLetters} ` +
+    `${plural(settings.morseLetters, 'letra', 'letras')} previstas. ` +
+    `Se ha elegido la O aunque la S sea cuatro puntos más corta: una marca delante de un nombre que empieza por esa misma letra ` +
+    `da dos códigos iguales seguidos, y de los doscientos del canon 22 empiezan por S y cinco por O. ` +
+    `Cuesta ${secs(markMs)} en cada pasada, frente a ${secs(repeatMs)} de una segunda pasada del mismo nombre.` +
+    (settings.morseMark ? '' : ' Ahora el nombre empieza directamente por su primera letra.');
 
   $('setMorseGapSymHint').textContent =
-    `Между точками и тире одной буквы. В самой азбуке она равна точке, но мотор к концу сигнала ещё ` +
-    `дотряхивает корпус, и на такой паузе точка с тире смазываются в один сигнал.`;
+    `Entre los puntos y las rayas de una misma letra. En el propio alfabeto equivale a un punto, pero al final de cada señal ` +
+    `el motor sigue sacudiendo la carcasa y, con una pausa así, el punto y la raya se emborronan en una sola señal.`;
 
   // Отношение двух пауз — единственное, что здесь можно сломать молча: буквы
   // делятся только тем, что между ними тише дольше. Показываем во сколько раз.
   const ratio = settings.morseGapLetter / settings.morseGapSym;
   $('setMorseGapLetterHint').textContent =
-    `Сейчас в ${ratio.toFixed(1)} раза длиннее паузы внутри буквы. ` +
+    `Ahora es ${ratio.toFixed(1)} veces más larga que la pausa dentro de la letra. ` +
     (ratio >= 2
-      ? 'Это единственный признак, по которому буквы вообще делятся.'
-      : 'Мало: буквы сольются в один поток точек и тире, делить их будет нечем.');
+      ? 'Es el único rasgo por el que las letras llegan a separarse.'
+      : 'Poco: las letras se fundirán en un único flujo de puntos y rayas y no habrá con qué separarlas.');
 
   // Пауза стыка отделяет метку от имени и первый проход от второго — задача
   // у неё в обоих местах одна, и ползунок поэтому один. А вот сломать её можно
@@ -1228,24 +1225,24 @@ function refreshMorseHint() {
   const name = morse.word(letters);
   $('setMorseGapRepeatHint').textContent =
     !settings.morseMark && !settings.morseTwice
-      ? 'Действует только с меткой или повтором.'
+      ? 'Solo actúa con la marca o con la repetición.'
       : settings.morseMark && settings.morseTwice
-        ? `Отделяет метку от имени и первый проход от второго. Равной межбуквенной быть не может: ` +
-          `метка прочитается первой буквой имени, а повтор — его продолжением, и «${name}» станет ` +
-          `вдвое длиннее на ощупь.`
+        ? `Separa la marca del nombre y la primera pasada de la segunda. No puede ser igual que la pausa entre letras: ` +
+          `la marca se leería como la primera letra del nombre, y la repetición, como su continuación, y «${name}» resultaría ` +
+          `el doble de largo al tacto.`
         : settings.morseMark
-          ? `Отделяет метку от имени. Равной межбуквенной быть не может: метка прочитается первой ` +
-            `буквой имени, и вместо «${name}» на ощупь выйдет «${morse.MARK.char}${name}».`
-          : `Между первым и вторым проходом. Равной межбуквенной быть не может: повтор прочитается ` +
-            `продолжением имени, и «${name}» станет вдвое длиннее на ощупь.`;
+          ? `Separa la marca del nombre. No puede ser igual que la pausa entre letras: la marca se leería como la primera ` +
+            `letra del nombre y, en vez de «${name}», al tacto saldría «${morse.MARK.char}${name}».`
+          : `Entre la primera y la segunda pasada. No puede ser igual que la pausa entre letras: la repetición se leería ` +
+            `como continuación del nombre y «${name}» resultaría el doble de largo al tacto.`;
 
   $('setMorseTwiceHint').textContent =
-    'Второй проход — то же имя с начала: второй шанс не только началу, но и середине. ' +
+    'La segunda pasada es el mismo nombre desde el principio: una segunda oportunidad no solo para el comienzo, sino también para el medio. ' +
     (settings.morseMark
-      ? `Начало и без него бережёт метка, а стоит она ${secs(markMs)} против ${secs(repeatMs)}. `
-      : 'Без метки это единственная страховка: ответ приходит без предупреждения, и пока рука ' +
-        'сообразила, что телефон вибрирует, первые буквы уже прошли. ') +
-    (letters.length ? `С повтором ${secs(twice)}, без него ${secs(once)}.` : 'Стоит ровно вдвое дольше.');
+      ? `El comienzo ya lo protege la marca, y esta cuesta ${secs(markMs)} frente a ${secs(repeatMs)}. `
+      : 'Sin la marca es el único seguro: la respuesta llega sin avisar y, para cuando la mano se da ' +
+        'cuenta de que el teléfono vibra, las primeras letras ya han pasado. ') +
+    (letters.length ? `Con repetición son ${secs(twice)}; sin ella, ${secs(once)}.` : 'Cuesta exactamente el doble.');
 }
 
 // Цена одной буквы — не константа: она зависит и от кода буквы, и от всех пауз.
@@ -1270,19 +1267,19 @@ function initSettings() {
   });
 
   bindRange('setThreshold', 'threshold', (v) => `${Math.round(v * 100)}%`, applyGate);
-  bindRange('setClip', 'clip', (v) => `${v} с`, refreshClipHint);
-  bindRange('setSilence', 'silence', (v) => `${v} с`, applyGate);
+  bindRange('setClip', 'clip', (v) => `${v} s`, refreshClipHint);
+  bindRange('setSilence', 'silence', (v) => `${v} s`, applyGate);
   // Пересчёт на месте: сессия, которой уже нечего делать, стоит на
   // бесконечности, и без него включённый переспрос подействовал бы только
   // со следующего трека — то есть ровно тогда, когда он и не нужен.
-  bindRange('setRecheck', 'recheck', (v) => (v ? `каждые ${v} с` : 'не переспрашивать'), () => {
+  bindRange('setRecheck', 'recheck', (v) => (v ? `cada ${v} s` : 'no volver a preguntar'), () => {
     if (session && (session.solved || !Number.isFinite(session.nextCheckAt))) scheduleRecheck(session);
   });
   // Паузы задаются в точках, а прикладывается всё в миллисекундах: подписи
   // показывают и то и другое, иначе «8» под ползунком не значит ничего.
-  const dots = (v) => `${v} ${plural(v, 'точка', 'точки', 'точек')} · ${v * settings.morse} мс`;
+  const dots = (v) => `${v} ${plural(v, 'punto', 'puntos')} · ${v * settings.morse} ms`;
   morseSyncs = [
-    bindRange('setMorse', 'morse', (v) => (v ? `${v} мс` : 'выключена'), refreshMorseHint),
+    bindRange('setMorse', 'morse', (v) => (v ? `${v} ms` : 'desactivada'), refreshMorseHint),
     bindRange('setMorseLetters', 'morseLetters', (v) => `${v}`, refreshMorseHint),
     bindRange('setMorseDash', 'morseDash', dots, refreshMorseHint),
     bindRange('setMorseGapSym', 'morseGapSym', dots, refreshMorseHint),
@@ -1306,7 +1303,7 @@ function initSettings() {
     el.blank.classList.toggle('is-white', settings.blankWhite);
     if (blank) setThemeColor(settings.blankWhite ? '#ffffff' : '#000000');
   });
-  bindRange('setBlankHold', 'blankHold', (v) => `${v} с`);
+  bindRange('setBlankHold', 'blankHold', (v) => `${v} s`);
 
   refreshClipHint();
   refreshMorseHint();
@@ -1346,7 +1343,7 @@ updateTokenNotice();
 // Первый заход: поле ключа спрятано в свёрнутом блоке, разворачиваем сразу.
 if (!settings.token) document.querySelector('.settings').open = true;
 if (!navigator.mediaDevices?.getUserMedia) {
-  showError('Браузер не умеет захватывать звук. Нужен современный Chrome, Firefox, Edge или Safari по HTTPS.');
+  showError('El navegador no admite la captura de sonido. Hace falta un Chrome, Firefox, Edge o Safari moderno a través de HTTPS.');
   el.toggle.disabled = true;
   el.blankBtn.disabled = true; // прятать нечего: слушать этот браузер всё равно не будет
 }

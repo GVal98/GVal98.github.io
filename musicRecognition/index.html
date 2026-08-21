@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="ru">
+<html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Распознавание музыки</title>
-<meta name="description" content="Слушает микрофон, сам замечает начало трека и распознаёт его через AudD.">
+<title>Reconocimiento de música</title>
+<meta name="description" content="Escucha el micrófono, detecta por sí solo el comienzo de una canción y la reconoce con AudD.">
 <meta name="theme-color" content="#0b0d12">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
 <link rel="stylesheet" href="./style.css">
@@ -14,11 +14,11 @@
 <header class="topbar">
   <div class="brand">
     <span class="brand-mark" aria-hidden="true"></span>
-    <h1>Распознавание музыки</h1>
+    <h1>Reconocimiento de música</h1>
   </div>
   <div class="topbar-right">
-    <span class="counter" id="requestCounter" title="Запросов к AudD за сессию">0 запросов</span>
-    <span class="pill pill--idle" id="statusPill">Остановлено</span>
+    <span class="counter" id="requestCounter" title="Solicitudes a AudD en esta sesión">0 solicitudes</span>
+    <span class="pill pill--idle" id="statusPill">Detenido</span>
   </div>
 </header>
 
@@ -26,23 +26,25 @@
   <!-- Управление -->
   <section class="card control">
     <div class="control-row">
-      <button class="btn btn--primary" id="toggleBtn">Начать слушать</button>
-      <button class="btn" id="blankBtn">Скрыть экран</button>
+      <button class="btn btn--primary" id="toggleBtn">Empezar a escuchar</button>
+      <button class="btn" id="blankBtn">Ocultar pantalla</button>
     </div>
     <p class="hint">
-      Слушает микрофон и сам замечает, что заиграла музыка. Держите устройство
-      так, чтобы колонки было слышно, — громкость важнее близости.
+      Escucha el micrófono y detecta por sí solo que ha empezado a sonar música.
+      Sostenga el dispositivo de modo que se oigan los altavoces: importa más el
+      volumen que la cercanía.
     </p>
     <p class="hint">
-      «Скрыть экран» убирает страницу целиком: приложение слушает и стучит морзянкой
-      дальше, но на экране пусто — ни названия трека, ни настроек. Экран при этом
-      горит, иначе умолкнет и вибрация. Обратно — долгим касанием.
+      «Ocultar pantalla» retira la página entera: la aplicación sigue escuchando y
+      marcando en morse, pero la pantalla queda vacía, sin título de la canción ni
+      ajustes. La pantalla se mantiene encendida; si se apagara, también callaría la
+      vibración. Para volver, mantenga pulsado.
     </p>
     <p class="notice" id="tokenNotice" hidden>
-      Нужен свой ключ AudD — заведите его на
+      Hace falta su propia clave de AudD: créela en
       <a href="https://dashboard.audd.io/" target="_blank" rel="noopener">dashboard.audd.io</a>
-      и вставьте в «Настройки» ниже. Ключ сохранится в этом браузере и никуда не отправляется,
-      кроме самого api.audd.io.
+      y péguela en «Ajustes», más abajo. La clave se guarda en este navegador y no se
+      envía a ningún sitio salvo al propio api.audd.io.
     </p>
     <p class="error" id="errorBox" hidden></p>
   </section>
@@ -50,29 +52,29 @@
   <!-- Живой монитор -->
   <section class="card monitor" id="monitor" hidden>
     <div class="monitor-head">
-      <h2>Что слышно сейчас</h2>
-      <span class="phase" id="phaseLabel">тишина</span>
+      <h2>Qué se oye ahora</h2>
+      <span class="phase" id="phaseLabel">silencio</span>
     </div>
 
-    <canvas id="spectrum" height="90" aria-label="Спектр входящего звука"></canvas>
+    <canvas id="spectrum" height="90" aria-label="Espectro del sonido entrante"></canvas>
 
     <div class="gauge">
       <div class="gauge-track">
         <div class="gauge-fill" id="scoreFill"></div>
-        <div class="gauge-mark" id="scoreMark" title="Порог срабатывания"></div>
+        <div class="gauge-mark" id="scoreMark" title="Umbral de activación"></div>
       </div>
       <div class="gauge-meta">
-        <span>Похоже на музыку</span>
+        <span>Parece música</span>
         <b id="scoreValue">0%</b>
       </div>
     </div>
 
     <div class="factors">
-      <div class="factor"><span>Громкость</span><i><u id="fLevel"></u></i></div>
-      <div class="factor"><span>Тональность</span><i><u id="fTone"></u></i></div>
-      <div class="factor"><span>Бас</span><i><u id="fBass"></u></i></div>
-      <div class="factor"><span>Непрерывность</span><i><u id="fFlow"></u></i></div>
-      <div class="factor"><span>Динамика</span><i><u id="fDyn"></u></i></div>
+      <div class="factor"><span>Volumen</span><i><u id="fLevel"></u></i></div>
+      <div class="factor"><span>Tonalidad</span><i><u id="fTone"></u></i></div>
+      <div class="factor"><span>Graves</span><i><u id="fBass"></u></i></div>
+      <div class="factor"><span>Continuidad</span><i><u id="fFlow"></u></i></div>
+      <div class="factor"><span>Dinámica</span><i><u id="fDyn"></u></i></div>
     </div>
 
     <p class="readout" id="readout"></p>
@@ -85,7 +87,7 @@
       <div class="now-art-empty" id="nowArtEmpty">♪</div>
     </div>
     <div class="now-body">
-      <span class="now-kicker" id="nowKicker">Сейчас играет</span>
+      <span class="now-kicker" id="nowKicker">Sonando ahora</span>
       <h2 id="nowTitle">—</h2>
       <p class="now-artist" id="nowArtist"></p>
       <p class="now-meta" id="nowMeta"></p>
@@ -96,67 +98,68 @@
   <!-- История -->
   <section class="card history">
     <div class="history-head">
-      <h2>История</h2>
-      <button class="btn btn--ghost btn--sm" id="clearHistoryBtn">Очистить</button>
+      <h2>Historial</h2>
+      <button class="btn btn--ghost btn--sm" id="clearHistoryBtn">Borrar</button>
     </div>
     <ol class="history-list" id="historyList"></ol>
-    <p class="empty" id="historyEmpty">Пока ничего не распознано.</p>
+    <p class="empty" id="historyEmpty">Todavía no se ha reconocido nada.</p>
   </section>
 
   <!-- Настройки -->
   <details class="card settings">
-    <summary>Настройки</summary>
+    <summary>Ajustes</summary>
 
-    <h3 class="settings-head">Распознавание</h3>
+    <h3 class="settings-head">Reconocimiento</h3>
     <div class="settings-grid">
       <label class="field">
-        <span class="field-label">API-ключ AudD</span>
+        <span class="field-label">Clave de API de AudD</span>
         <input type="text" id="setToken" spellcheck="false" autocomplete="off"
-               placeholder="вставьте ключ с dashboard.audd.io">
-        <small>Хранится только в localStorage этого браузера — на каждом устройстве
-          вводится отдельно.</small>
+               placeholder="pegue la clave de dashboard.audd.io">
+        <small>Se guarda solo en el localStorage de este navegador: hay que
+          introducirla en cada dispositivo por separado.</small>
       </label>
 
       <label class="field">
-        <span class="field-label">Порог «это музыка» — <b id="setThresholdVal"></b></span>
+        <span class="field-label">Umbral de «esto es música» — <b id="setThresholdVal"></b></span>
         <input type="range" id="setThreshold" min="0.2" max="0.9" step="0.01">
-        <small>Ниже — срабатывает чаще и ошибается на шуме. Выше — пропускает тихую музыку.</small>
+        <small>Más bajo: se activa más a menudo y se equivoca con el ruido. Más alto: se le escapa la música baja.</small>
       </label>
 
       <label class="field">
-        <span class="field-label">Длина фрагмента — <b id="setClipVal"></b></span>
+        <span class="field-label">Duración del fragmento — <b id="setClipVal"></b></span>
         <input type="range" id="setClip" min="5" max="15" step="1">
         <small id="setClipHint"></small>
       </label>
 
       <label class="field">
-        <span class="field-label">Пауза = трек закончился — <b id="setSilenceVal"></b></span>
+        <span class="field-label">Pausa = la canción ha terminado — <b id="setSilenceVal"></b></span>
         <input type="range" id="setSilence" min="1" max="10" step="1">
-        <small>Должна быть короче паузы между вопросами: тогда каждый вопрос —
-          отдельный трек. Если длиннее, вопросы склеятся в один, и следующие
-          приложение заметит только по разрыву в музыке или по переспросу.</small>
+        <small>Debe ser más corta que la pausa entre preguntas: así cada pregunta es
+          una canción distinta. Si es más larga, las preguntas se pegarán en una sola
+          y la aplicación solo notará las siguientes por un corte en la música o por
+          una reconsulta.</small>
       </label>
 
       <label class="field">
-        <span class="field-label">Переспрашивать во время музыки — <b id="setRecheckVal"></b></span>
+        <span class="field-label">Volver a preguntar mientras suena la música — <b id="setRecheckVal"></b></span>
         <input type="range" id="setRecheck" min="0" max="60" step="5">
-        <small>Страховка на случай, когда музыка не смолкает вовсе: в паузе между
-          вопросами играет фон, и приложение не видит, что вопрос сменился.
-          Каждый переспрос — ещё один запрос к AudD, даже если играет всё тот же трек.
-          0 — не переспрашивать.</small>
+        <small>Seguro para cuando la música no llega a callarse: en la pausa entre
+          preguntas suena música de fondo y la aplicación no ve que la pregunta ha
+          cambiado. Cada reconsulta es una solicitud más a AudD, aunque siga sonando
+          la misma canción. 0 — no volver a preguntar.</small>
       </label>
     </div>
 
-    <h3 class="settings-head">Вибрация ответа</h3>
+    <h3 class="settings-head">Vibración de la respuesta</h3>
     <div class="settings-grid">
       <label class="field">
-        <span class="field-label">Длина точки — <b id="setMorseVal"></b></span>
+        <span class="field-label">Duración del punto — <b id="setMorseVal"></b></span>
         <input type="range" id="setMorse" min="0" max="240" step="10">
         <small id="setMorseHint"></small>
       </label>
 
       <label class="field">
-        <span class="field-label">Букв имени — <b id="setMorseLettersVal"></b></span>
+        <span class="field-label">Letras del nombre — <b id="setMorseLettersVal"></b></span>
         <input type="range" id="setMorseLetters" min="2" max="8" step="1">
         <small id="setMorseLettersHint"></small>
       </label>
@@ -164,26 +167,26 @@
       <div class="field">
         <label class="field-label field-check">
           <input type="checkbox" id="setMorseSimple">
-          <span>Упрощённая азбука</span>
+          <span>Alfabeto simplificado</span>
         </label>
         <small id="setMorseSimpleHint"></small>
       </div>
 
       <label class="field">
-        <span class="field-label">Тире — <b id="setMorseDashVal"></b></span>
+        <span class="field-label">Raya — <b id="setMorseDashVal"></b></span>
         <input type="range" id="setMorseDash" min="2" max="6" step="1">
-        <small>В точках. В самой азбуке тире равно трём точкам; короче двух оно
-          на ощупь не отличается от точки.</small>
+        <small>En puntos. En el propio alfabeto la raya equivale a tres puntos; por
+          debajo de dos no se distingue al tacto de un punto.</small>
       </label>
 
       <label class="field">
-        <span class="field-label">Пауза внутри буквы — <b id="setMorseGapSymVal"></b></span>
+        <span class="field-label">Pausa dentro de la letra — <b id="setMorseGapSymVal"></b></span>
         <input type="range" id="setMorseGapSym" min="1" max="8" step="1">
         <small id="setMorseGapSymHint"></small>
       </label>
 
       <label class="field">
-        <span class="field-label">Пауза между буквами — <b id="setMorseGapLetterVal"></b></span>
+        <span class="field-label">Pausa entre letras — <b id="setMorseGapLetterVal"></b></span>
         <input type="range" id="setMorseGapLetter" min="2" max="20" step="1">
         <small id="setMorseGapLetterHint"></small>
       </label>
@@ -191,7 +194,7 @@
       <div class="field">
         <label class="field-label field-check">
           <input type="checkbox" id="setMorseMark">
-          <span>Метка начала</span>
+          <span>Marca de inicio</span>
         </label>
         <small id="setMorseMarkHint"></small>
       </div>
@@ -199,57 +202,58 @@
       <div class="field">
         <label class="field-label field-check">
           <input type="checkbox" id="setMorseTwice">
-          <span>Повторять имя дважды</span>
+          <span>Repetir el nombre dos veces</span>
         </label>
         <small id="setMorseTwiceHint"></small>
       </div>
 
       <label class="field">
-        <span class="field-label">Пауза на стыке — <b id="setMorseGapRepeatVal"></b></span>
+        <span class="field-label">Pausa de separación — <b id="setMorseGapRepeatVal"></b></span>
         <input type="range" id="setMorseGapRepeat" min="4" max="32" step="2">
         <small id="setMorseGapRepeatHint"></small>
       </label>
     </div>
-    <h3 class="settings-head">Скрытый экран</h3>
+    <h3 class="settings-head">Pantalla oculta</h3>
     <div class="settings-grid">
       <div class="field">
         <label class="field-label field-check">
           <input type="checkbox" id="setBlankWhite">
-          <span>Белый экран вместо чёрного</span>
+          <span>Pantalla blanca en vez de negra</span>
         </label>
-        <small>Чёрный не светит в тёмном зале и на OLED почти ничего не тратит.
-          Белый берут, когда чёрный экран путают с выключенным телефоном.</small>
+        <small>La negra no ilumina en una sala a oscuras y en OLED casi no gasta.
+          La blanca se elige cuando la pantalla negra se confunde con un teléfono
+          apagado.</small>
       </div>
 
       <label class="field">
-        <span class="field-label">Держать, чтобы вернуть экран — <b id="setBlankHoldVal"></b></span>
+        <span class="field-label">Mantener pulsado para recuperar la pantalla — <b id="setBlankHoldVal"></b></span>
         <input type="range" id="setBlankHold" min="0.5" max="4" step="0.5">
-        <small>Короткое касание не считается: в кармане телефон нажимается сам.
-          Сдвиг пальца сбрасывает отсчёт, а пока держите — видно, что приложение
-          делает и что услышало последним.</small>
+        <small>Un toque corto no cuenta: en el bolsillo el teléfono se pulsa solo.
+          Mover el dedo reinicia la cuenta y, mientras mantiene pulsado, se ve qué
+          está haciendo la aplicación y qué fue lo último que oyó.</small>
       </label>
     </div>
 
     <div class="settings-actions">
-      <button class="btn btn--ghost btn--sm" id="resetSettingsBtn">Вернуть значения по умолчанию</button>
-      <button class="btn btn--ghost btn--sm" id="testMorseBtn">Проверить вибрацию</button>
+      <button class="btn btn--ghost btn--sm" id="resetSettingsBtn">Restaurar valores por defecto</button>
+      <button class="btn btn--ghost btn--sm" id="testMorseBtn">Probar la vibración</button>
     </div>
   </details>
 
   <!-- Тренировка -->
   <details class="card trainer">
-    <summary>Тренировка морзянки</summary>
+    <summary>Entrenamiento de morse</summary>
     <p class="hint">
-      Телефон загадывает исполнителя из двух сотен известных и отстукивает его
-      теми же настройками, какими стучит настоящий ответ. «Отстучать» повторяет
-      загаданное имя сколько угодно раз, «Следующий» берёт новое и сразу стучит.
-      Разбирать удобнее не глядя на экран: на ощупь считывается не точка с тире,
-      а форма всей буквы, и глаза этому только мешают.
+      El teléfono piensa un artista de entre un par de centenares conocidos y lo marca
+      con los mismos ajustes con los que marca una respuesta real. «Marcar» repite el
+      nombre pensado tantas veces como quiera; «Siguiente» toma uno nuevo y lo marca al
+      momento. Se descifra mejor sin mirar la pantalla: al tacto no se leen el punto y
+      la raya, sino la forma de la letra entera, y los ojos solo estorban.
     </p>
     <div class="control-row trainer-row">
-      <button class="btn btn--primary" id="trainBuzzBtn">Отстучать</button>
-      <button class="btn" id="trainShowBtn">Показать</button>
-      <button class="btn" id="trainNextBtn">Следующий</button>
+      <button class="btn btn--primary" id="trainBuzzBtn">Marcar</button>
+      <button class="btn" id="trainShowBtn">Mostrar</button>
+      <button class="btn" id="trainNextBtn">Siguiente</button>
     </div>
     <p class="trainer-answer" id="trainAnswer"></p>
     <p class="readout trainer-code" id="trainCode"></p>
@@ -257,7 +261,7 @@
 
   <!-- Журнал -->
   <details class="card log">
-    <summary>Журнал событий</summary>
+    <summary>Registro de eventos</summary>
     <ul class="log-list" id="logList"></ul>
   </details>
 </main>
@@ -266,7 +270,7 @@
 <div class="blank" id="blank" hidden>
   <div class="blank-hint">
     <div class="blank-state" id="blankState"></div>
-    <div>Держите, чтобы вернуть экран</div>
+    <div>Mantenga pulsado para recuperar la pantalla</div>
     <div class="blank-bar"><i id="blankBar"></i></div>
   </div>
 </div>
