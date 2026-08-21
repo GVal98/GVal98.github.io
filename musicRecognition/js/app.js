@@ -51,11 +51,19 @@ const DEFAULTS = {
   // и каждого кармана эта граница своя.
   morseGapSym: 3,      // между точками и тире внутри буквы
   morseGapLetter: 8,   // между буквами; обязан быть заметно больше предыдущего
-  morseGapRepeat: 16,  // между первым и вторым проходом
-  // Повтор удваивает и без того немалое время — при 120 мс это 19 секунд,
-  // дольше самого трека-вопроса. Поэтому отдельной галочкой: одному нужно
-  // успеть поймать начало, другому — не вибрировать сквозь следующий вопрос.
-  morseTwice: true,
+  morseGapRepeat: 16,  // на стыке: после метки и между проходами
+  // Метка начала: перед именем стучится всегда одна и та же буква, O. Ответ
+  // приходит без предупреждения, и пока рука сообразила, что телефон вибрирует,
+  // первая буква имени уже прошла; метка забирает этот момент себе — теряется
+  // она, а не начало ответа. Буквой имени она не считается и в отмеренную
+  // пятёрку не входит. Включена, потому что делает работу второго прохода —
+  // бережёт начало — втрое дешевле его: 3.7 секунды против 11.
+  morseMark: true,
+  // Повтор удваивает и без того немалое время: среднее имя канона — 9 секунд
+  // одним проходом и 20 двумя, дольше самого трека-вопроса. Начало теперь
+  // бережёт метка, и по умолчанию повтор выключен. Остаётся он для тех, кому
+  // нужен второй шанс на всё имя, а не только на его начало.
+  morseTwice: false,
   // Скрытый экран: страницы не видно, приложение слушает и стучит дальше.
   blankWhite: false,  // чёрный или белый — на сам звук это не влияет никак
   blankHold: 1.5,     // сколько держать палец, чтобы вернуть интерфейс
@@ -580,7 +588,7 @@ function buzzArtist(artist, { secret = false } = {}) {
   const sent = navigator.vibrate(morse.pattern(letters, timing()));
   const what = secret
     ? `вслепую, ${letters.length} ${plural(letters.length, 'буква', 'буквы', 'букв')}`
-    : `${morse.word(letters)} · ${morse.dashes(letters)}`;
+    : readout(letters);
   log('', `вибрация ${what}` + (sent ? '' : ' — браузер не пропустил'));
 }
 
@@ -595,6 +603,13 @@ function spell(name = buzzSample()) {
   return morse.spell(name, settings.morseLetters, settings.morseSimple);
 }
 
+// Что уйдёт в мотор — буквами и знаками, одной строкой: «KUIN · −·− ··− ·· −·».
+// Метка, если включена, стоит впереди через косую черту: буквой имени она
+// не является, и приписанная вплотную читалась бы как ещё одна.
+function readout(letters) {
+  return `${morse.word(letters, settings.morseMark)} · ${morse.dashes(letters, settings.morseMark)}`;
+}
+
 // Настройки хранятся плоско — иначе новый ключ, добавленный к уже сохранённому
 // объекту, не получил бы значения по умолчанию при слиянии. Морзянке нужен
 // объект, здесь их и собираем.
@@ -605,6 +620,7 @@ function timing(twice = settings.morseTwice) {
     gapSymbol: settings.morseGapSym,
     gapLetter: settings.morseGapLetter,
     gapRepeat: settings.morseGapRepeat,
+    mark: settings.morseMark,
     twice,
   };
 }
@@ -674,7 +690,7 @@ function renderTraining() {
   // второй строки «не угадал» выглядит ошибкой слуха, а не работой азбуки.
   const letters = spell(training.name);
   answer.textContent = training.name;
-  code.textContent = letters.length ? `${morse.word(letters)} · ${morse.dashes(letters)}` : '';
+  code.textContent = letters.length ? readout(letters) : '';
 }
 
 function plural(n, one, few, many) {
@@ -1014,17 +1030,19 @@ function refreshMorseHint() {
 
   for (const sync of morseSyncs) sync();
   for (const id of ['testMorseBtn', 'setMorseLetters', 'setMorseSimple', 'setMorseDash', 'setMorseGapSym',
-                    'setMorseGapLetter', 'setMorseTwice', 'setMorseGapRepeat']) {
+                    'setMorseGapLetter', 'setMorseMark', 'setMorseTwice', 'setMorseGapRepeat']) {
     $(id).disabled = off;
   }
-  $('setMorseGapRepeat').disabled = off || !settings.morseTwice;
+  // Пауза стыка стоит и после метки, и перед повтором: снять её можно только
+  // вместе с обоими.
+  $('setMorseGapRepeat').disabled = off || !(settings.morseMark || settings.morseTwice);
   renderTraining();
 
   if (off) {
     $('setMorseHint').textContent = 'Телефон молчит: ответ видно только на экране.';
     $('setMorseTwiceHint').textContent = 'Повторять нечего — вибрация выключена.';
     for (const id of ['setMorseLettersHint', 'setMorseSimpleHint', 'setMorseGapSymHint',
-                      'setMorseGapLetterHint', 'setMorseGapRepeatHint']) {
+                      'setMorseGapLetterHint', 'setMorseMarkHint', 'setMorseGapRepeatHint']) {
       $(id).textContent = '';
     }
     stopBuzz(); // выключили посреди морзянки — она не должна доиграть
@@ -1033,8 +1051,15 @@ function refreshMorseHint() {
 
   const once = morse.totalMs(letters, timing(false));
   const twice = morse.totalMs(letters, timing(true));
+  // Цена метки и цена повтора — на этом самом имени и этих настройках. Обе
+  // сравниваются в подсказках друг с другом, и обе зависят от всех ползунков
+  // сразу, так что считаются, а не берутся из таблицы.
+  const markMs = morse.totalMs(letters, { ...timing(false), mark: true })
+               - morse.totalMs(letters, { ...timing(false), mark: false });
+  const repeatMs = twice - once;
   const shown = letters.length
-    ? `«${morse.word(letters)}» → ${morse.dashes(letters)}, это ${secs(settings.morseTwice ? twice : once)}. `
+    ? `«${morse.word(letters, settings.morseMark)}» → ${morse.dashes(letters, settings.morseMark)}, ` +
+      `это ${secs(settings.morseTwice ? twice : once)}. `
     : '';
 
   $('setMorseHint').textContent =
@@ -1080,6 +1105,17 @@ function refreshMorseHint() {
           ? `«${morse.word(full)}» уходит в мотор как «${morse.word(letters)}»${delta}.`
           : `В «${morse.word(letters)}» заменять нечего — на ощупь ничего не изменится.`);
 
+  $('setMorseMarkHint').textContent =
+    `Перед именем стучится всегда одна и та же буква — ${morse.MARK.char}, это ${morse.dashes([morse.MARK])}, — ` +
+    `и пауза стыка после неё. Ответ приходит без предупреждения: пока рука сообразила, что телефон вибрирует, ` +
+    `первая буква имени уже прошла. Метка забирает этот момент себе — пропускают её, а не начало ответа. ` +
+    `Буквой имени она при этом не считается и в отмеренные ${settings.morseLetters} ` +
+    `${plural(settings.morseLetters, 'букву', 'буквы', 'букв')} не входит. ` +
+    `Буква взята O, хотя S короче на четыре точки: метка перед именем, которое начинается с той же буквы, ` +
+    `даёт два одинаковых кода подряд, а из двух сотен канона с S начинаются 22 имени, с O — пять. ` +
+    `Стоит она ${secs(markMs)} в каждом проходе — против ${secs(repeatMs)} за второй проход того же имени.` +
+    (settings.morseMark ? '' : ' Сейчас имя начинается сразу со своей первой буквы.');
+
   $('setMorseGapSymHint').textContent =
     `Между точками и тире одной буквы. В самой азбуке она равна точке, но мотор к концу сигнала ещё ` +
     `дотряхивает корпус, и на такой паузе точка с тире смазываются в один сигнал.`;
@@ -1093,13 +1129,29 @@ function refreshMorseHint() {
       ? 'Это единственный признак, по которому буквы вообще делятся.'
       : 'Мало: буквы сольются в один поток точек и тире, делить их будет нечем.');
 
-  $('setMorseGapRepeatHint').textContent = settings.morseTwice
-    ? `Между первым и вторым проходом. Равной межбуквенной быть не может: повтор прочитается ` +
-      `продолжением имени, и «${morse.word(letters)}» станет вдвое длиннее на ощупь.`
-    : 'Действует только с повтором.';
+  // Пауза стыка отделяет метку от имени и первый проход от второго — задача
+  // у неё в обоих местах одна, и ползунок поэтому один. А вот сломать её можно
+  // по-разному, и подсказка говорит ровно о том, что сейчас включено.
+  const name = morse.word(letters);
+  $('setMorseGapRepeatHint').textContent =
+    !settings.morseMark && !settings.morseTwice
+      ? 'Действует только с меткой или повтором.'
+      : settings.morseMark && settings.morseTwice
+        ? `Отделяет метку от имени и первый проход от второго. Равной межбуквенной быть не может: ` +
+          `метка прочитается первой буквой имени, а повтор — его продолжением, и «${name}» станет ` +
+          `вдвое длиннее на ощупь.`
+        : settings.morseMark
+          ? `Отделяет метку от имени. Равной межбуквенной быть не может: метка прочитается первой ` +
+            `буквой имени, и вместо «${name}» на ощупь выйдет «${morse.MARK.char}${name}».`
+          : `Между первым и вторым проходом. Равной межбуквенной быть не может: повтор прочитается ` +
+            `продолжением имени, и «${name}» станет вдвое длиннее на ощупь.`;
 
   $('setMorseTwiceHint').textContent =
-    'Второй проход добирает начало, если первое прозевали: ответ приходит без предупреждения. ' +
+    'Второй проход — то же имя с начала: второй шанс не только началу, но и середине. ' +
+    (settings.morseMark
+      ? `Начало и без него бережёт метка, а стоит она ${secs(markMs)} против ${secs(repeatMs)}. `
+      : 'Без метки это единственная страховка: ответ приходит без предупреждения, и пока рука ' +
+        'сообразила, что телефон вибрирует, первые буквы уже прошли. ') +
     (letters.length ? `С повтором ${secs(twice)}, без него ${secs(once)}.` : 'Стоит ровно вдвое дольше.');
 }
 
@@ -1108,7 +1160,9 @@ function refreshMorseHint() {
 function perLetterMs() {
   const letters = spell();
   if (!letters.length) return 0;
-  return morse.totalMs(letters, timing()) / letters.length;
+  // Без метки: она стоит одинаково при любом числе букв, и в цену буквы её доля
+  // не входит — иначе четыре буквы выглядели бы дороже, чем стоят.
+  return morse.totalMs(letters, { ...timing(), mark: false }) / letters.length;
 }
 
 function initSettings() {
@@ -1146,6 +1200,7 @@ function initSettings() {
   // посмотреть на цифру. Отстукиваем новый вариант сразу — но на change, а не на
   // input: во время перетаскивания каждое движение обрывало бы предыдущий шаблон,
   // и под пальцем была бы не морзянка, а дребезг.
+  bindCheck('setMorseMark', 'morseMark', () => { refreshMorseHint(); buzzArtist(buzzSample()); });
   bindCheck('setMorseTwice', 'morseTwice', () => { refreshMorseHint(); buzzArtist(buzzSample()); });
   bindCheck('setMorseSimple', 'morseSimple', () => { refreshMorseHint(); buzzArtist(buzzSample()); });
   for (const id of ['setMorse', 'setMorseLetters', 'setMorseDash', 'setMorseGapSym',

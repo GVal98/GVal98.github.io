@@ -190,6 +190,14 @@
 
       <div class="field">
         <label class="field-label field-check">
+          <input type="checkbox" id="setMorseMark">
+          <span>Метка начала</span>
+        </label>
+        <small id="setMorseMarkHint"></small>
+      </div>
+
+      <div class="field">
+        <label class="field-label field-check">
           <input type="checkbox" id="setMorseTwice">
           <span>Повторять имя дважды</span>
         </label>
@@ -197,7 +205,7 @@
       </div>
 
       <label class="field">
-        <span class="field-label">Пауза между проходами — <b id="setMorseGapRepeatVal"></b></span>
+        <span class="field-label">Пауза на стыке — <b id="setMorseGapRepeatVal"></b></span>
         <input type="range" id="setMorseGapRepeat" min="4" max="32" step="2">
         <small id="setMorseGapRepeatHint"></small>
       </label>

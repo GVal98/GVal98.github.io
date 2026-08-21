@@ -132,6 +132,20 @@ const CANON = { dash: 3, gapSymbol: 1, gapLetter: 3, gapRepeat: 7 };
 // так что упущенное начало добирается из него.
 const REPEATS = 2;
 
+// Метка начала. Морзянка приходит без предупреждения, и пока рука сообразила,
+// что телефон вибрирует, первая буква имени уже прошла. Перед именем стучится
+// всегда одна и та же буква — теряется в этот момент она, а не начало ответа.
+// Буквой имени метка не считается: в отмеренную пятёрку она не входит, а от
+// имени отделена паузой стыка. Межбуквенной она быть не может, иначе метка
+// прочитается первой буквой имени и «KUIN» станет пятибуквенным «OKUIN».
+//
+// Буква выбрана O, хотя S на четыре точки короче. Причин две. Метка перед
+// именем, которое начинается с той же буквы, даёт два одинаковых кода подряд —
+// ровно ту развилку, ради которой упрощённая азбука схлопывает сдвоенные; на
+// двух сотнях канона с S начинаются 22 имени, с O — пять. И три тире дольше
+// трёх точек, а метке ровно это и нужно: её задача — быть тем, что пропустят.
+export const MARK = { char: 'O', code: MORSE.O };
+
 /** Сколько букв стучим, если вызывающий не сказал иначе. */
 const MAX_CHARS = 5;
 
@@ -212,27 +226,40 @@ export function simplePairs() {
 
 /**
  * Массив для navigator.vibrate: [вибрация, пауза, вибрация, …] в миллисекундах.
- * `dot` — длина точки, остальное кратно ей. Пять букв дают в худшем случае,
- * с повтором, восемь десятков значений — всё ещё меньше сотни, на которой
- * браузеры обрезают шаблон.
+ * `dot` — длина точки, остальное кратно ей.
+ *
+ * Складывается всё это из блоков: метка, если включена, и само имя — и то же
+ * самое ещё раз, если включён повтор. Внутри блока буквы разделены
+ * межбуквенной паузой, между блоками стоит пауза стыка — одна и та же и после
+ * метки, и перед повтором: задача у неё в обоих местах одна, сказать, что одно
+ * кончилось и началось другое. Метка стучится перед каждым проходом, а не
+ * только перед первым: второй начинается так же внезапно, как первый, и без
+ * метки читается продолжением имени, а не именем сначала.
+ *
+ * Пять букв дают в худшем случае, с меткой и повтором, девять десятков
+ * значений — всё ещё меньше сотни, на которой браузеры обрезают шаблон.
  */
 export function pattern(letters, timing) {
-  const { dot, twice = false } = timing;
+  const { dot, twice = false, mark = false } = timing;
   const { dash, gapSymbol, gapLetter, gapRepeat } = { ...CANON, ...timing };
 
-  const once = [];
-  for (const { code } of letters) {
-    if (once.length) once.push(gapLetter * dot);
-    for (let i = 0; i < code.length; i++) {
-      if (i) once.push(gapSymbol * dot);
-      once.push((code[i] === '-' ? dash : 1) * dot);
-    }
+  // Метку без имени не стучим: метить нечего, а шаблон вышел бы из одних меток.
+  const blocks = [];
+  for (let r = 0; letters.length && r < (twice ? REPEATS : 1); r++) {
+    if (mark) blocks.push([MARK]);
+    blocks.push(letters);
   }
 
   const out = [];
-  for (let r = 0; r < (twice ? REPEATS : 1); r++) {
+  for (const block of blocks) {
     if (out.length) out.push(gapRepeat * dot);
-    out.push(...once);
+    block.forEach(({ code }, n) => {
+      if (n) out.push(gapLetter * dot);
+      for (let i = 0; i < code.length; i++) {
+        if (i) out.push(gapSymbol * dot);
+        out.push((code[i] === '-' ? dash : 1) * dot);
+      }
+    });
   }
   return out;
 }
@@ -241,12 +268,19 @@ export function totalMs(letters, timing) {
   return pattern(letters, timing).reduce((sum, ms) => sum + ms, 0);
 }
 
-/** «QUEEN» — что именно уйдёт в мотор, буквами. */
-export function word(letters) {
-  return letters.map((l) => l.char).join('');
+// Метка в подписи отделена от имени косой чертой, а не приписана к нему
+// вплотную: буквой имени она не является, и «OKUIN» читалось бы именем,
+// в котором на букву больше, чем стучится на самом деле.
+
+/** «QUEEN» — что именно уйдёт в мотор, буквами. С меткой — «O / QUEEN». */
+export function word(letters, mark = false) {
+  const name = letters.map((l) => l.char).join('');
+  return mark ? `${MARK.char} / ${name}` : name;
 }
 
 /** «−−·− ··− · · −·» — то же самое кодом, для журнала и настроек. */
-export function dashes(letters) {
-  return letters.map(({ code }) => code.replace(/\./g, '·').replace(/-/g, '−')).join(' ');
+export function dashes(letters, mark = false) {
+  const code = ({ code }) => code.replace(/\./g, '·').replace(/-/g, '−');
+  const name = letters.map(code).join(' ');
+  return mark ? `${code(MARK)} / ${name}` : name;
 }
