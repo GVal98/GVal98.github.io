@@ -27,13 +27,14 @@ const LBL_FIRST = 2;
 const FIELDS = ['t', 'ax', 'ay', 'az', 'lx', 'ly', 'lz', 'rx', 'ry', 'rz', 'beta', 'gamma', 'l'];
 
 const DEFAULTS = {
-  nameA: 'pie apoyado',
-  nameB: 'pie levantado',
+  v: 2,          // версия набора настроек, см. loadCfg
+  nameA: 'нога опущена',
+  nameB: 'нога поднята',
   prep: 10,      // с на то, чтобы убрать телефон в карман и сесть как обычно
   settle: 2.5,   // с после команды — это движение, в статистику не идёт
   hold: 6,       // с удержания позы: вот они и есть данные
   cycles: 4,     // сколько раз повторить пару поз
-  freeName: 'andando',
+  freeName: 'иду',
 };
 
 // Команды даёт вибрация: одна длинная — первая поза, две короткие — вторая.
@@ -89,8 +90,13 @@ const trace = [];
 /* ------------------------------------------------------------------ хранилище */
 
 function loadCfg() {
-  try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(LS_CFG) || '{}') }; }
-  catch { return { ...DEFAULTS }; }
+  try {
+    const saved = JSON.parse(localStorage.getItem(LS_CFG) || '{}');
+    // Названия поз сменили язык. Сохранённые с прошлой версии перебили бы новые
+    // умолчания, и половина записей разошлась бы с другой половиной подписями.
+    if (saved.v !== DEFAULTS.v) return { ...DEFAULTS };
+    return { ...DEFAULTS, ...saved };
+  } catch { return { ...DEFAULTS }; }
 }
 function saveCfg() {
   try { localStorage.setItem(LS_CFG, JSON.stringify(cfg)); } catch { /* переживём */ }
@@ -110,7 +116,7 @@ function saveSessions() {
     try { localStorage.setItem(LS_SESSIONS, JSON.stringify(sessions)); return true; }
     catch {
       if (sessions.length <= 1) {
-        showError('No cabe en el navegador: descargue la grabación y borre las anteriores.');
+        showError('Не влезло в браузер: скачайте запись и удалите старые.');
         return false;
       }
       sessions.pop();
@@ -128,9 +134,19 @@ function setStatus(kind, text) {
   el.status.className = `pill pill--${kind}`;
   el.status.textContent = text;
 }
-function fecha(iso) {
-  return new Date(iso).toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+function when(iso) {
+  return new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
+
+/** Три формы, без которых счёт по-русски врёт: 1 кадр, 2 кадра, 5 кадров. */
+function plural(n, one, few, many) {
+  const ten = Math.abs(n) % 100;
+  const last = ten % 10;
+  if (ten > 10 && ten < 20) return many;
+  if (last > 1 && last < 5) return few;
+  return last === 1 ? one : many;
+}
+const frames = (n) => `${n} ${plural(n, 'кадр', 'кадра', 'кадров')}`;
 
 /** Сигнал команды. Где вибрации нет (Safari), остаётся короткий писк. */
 function buzz(pattern) {
@@ -163,11 +179,11 @@ async function askPermission() {
     if (typeof DeviceOrientationEvent?.requestPermission === 'function') {
       await DeviceOrientationEvent.requestPermission().catch(() => {});
     }
-    if (motion !== 'granted') return showError('No se ha permitido el acceso a los sensores.');
+    if (motion !== 'granted') return showError('Доступ к датчикам не разрешён.');
     el.perm.hidden = true;
     startSensors();
   } catch (e) {
-    showError(e.message || 'No se ha podido pedir el acceso a los sensores.');
+    showError(e.message || 'Не удалось спросить доступ к датчикам.');
   }
 }
 
@@ -183,7 +199,7 @@ function startSensors() {
   // мог отдать разрешение и промолчать. Молчащая страница выглядит сломанной —
   // скажем прямо, чего не хватает.
   setTimeout(() => {
-    if (!live) showError('El sensor no envía nada: hace falta un teléfono y una conexión https.');
+    if (!live) showError('Датчик ничего не шлёт: нужен телефон и https.');
   }, 1500);
 }
 
@@ -243,7 +259,7 @@ function drawLive() {
   el.vals.beta.textContent = `${live.beta.toFixed(0)}°`;
   el.vals.gamma.textContent = `${live.gamma.toFixed(0)}°`;
   const sec = (performance.now() - eventsFrom) / 1000;
-  el.hz.textContent = sec > 1 ? `${Math.round(events / sec)} Hz` : '—';
+  el.hz.textContent = sec > 1 ? `${Math.round(events / sec)} Гц` : '—';
   drawTrace();
 }
 
@@ -306,7 +322,8 @@ function planOf(c) {
 
 function planText() {
   const { total } = planOf(cfg);
-  return `${cfg.cycles * 2} posturas, ${Math.round(total / 1000)} s en total con la preparación.`;
+  const n = cfg.cycles * 2;
+  return `${n} ${plural(n, 'поза', 'позы', 'поз')}, ${Math.round(total / 1000)} с вместе с подготовкой.`;
 }
 
 function openRec(mode) {
@@ -328,14 +345,14 @@ function openRec(mode) {
 
 async function begin(mode) {
   if (rec) return;
-  if (!live) return showError('El sensor todavía no envía nada: no hay qué grabar.');
+  if (!live) return showError('Датчик ещё ничего не прислал: записывать нечего.');
   showError('');
   rec = openRec(mode);
-  if (mode === 'serie') {
-    rec.labels = ['preparación', 'transición', cfg.nameA, cfg.nameB];
+  if (mode === 'series') {
+    rec.labels = ['подготовка', 'переход', cfg.nameA, cfg.nameB];
     Object.assign(rec, planOf(cfg));
   } else {
-    rec.labels = ['preparación', 'transición', cfg.freeName || 'sin nombre'];
+    rec.labels = ['подготовка', 'переход', cfg.freeName || 'без имени'];
     rec.steps = null;
     rec.total = 0;
   }
@@ -362,7 +379,7 @@ function tick() {
   if (now < prep) {
     curLabel = LBL_PREP;
     const left = Math.ceil((prep - now) / 1000);
-    cueText('Prepárese', `${left} s para guardar el teléfono en el bolsillo`);
+    cueText('Приготовьтесь', `${left} с, чтобы убрать телефон в карман`);
     // Последние три секунды отсчитываются вибрацией: в кармане экрана не видно,
     // а первая команда не должна застать врасплох.
     if (left <= 3 && rec.at !== `prep${left}`) { rec.at = `prep${left}`; buzz(BUZZ.tick); }
@@ -371,13 +388,13 @@ function tick() {
 
   // Свободная запись — одна длинная поза без расписания: она нужна не для
   // порога, а для проверки, не сработает ли он там, где никто ничего не просил.
-  if (rec.mode === 'libre') {
+  if (rec.mode === 'free') {
     if (curLabel !== LBL_FIRST) {
       curLabel = LBL_FIRST;
       rec.cues.push([Math.round(now), LBL_FIRST]);
       buzz(BUZZ.A);
     }
-    cueText(rec.labels[LBL_FIRST], `${Math.round((now - prep) / 1000)} s grabados · «Parar» al terminar`);
+    cueText(rec.labels[LBL_FIRST], `записано ${Math.round((now - prep) / 1000)} с · «Стоп», когда хватит`);
     return;
   }
 
@@ -396,8 +413,8 @@ function tick() {
   const settle = rec.cfg.settle * 1000;
   if (inStep >= settle) curLabel = step.label;
   cueText(rec.labels[step.label], inStep < settle
-    ? `${i + 1} de ${rec.steps.length} · colóquese`
-    : `${i + 1} de ${rec.steps.length} · ${Math.ceil((settle + rec.cfg.hold * 1000 - inStep) / 1000)} s sin moverse`);
+    ? `${i + 1} из ${rec.steps.length} · меняйте позу`
+    : `${i + 1} из ${rec.steps.length} · ${Math.ceil((settle + rec.cfg.hold * 1000 - inStep) / 1000)} с не двигаться`);
 }
 
 /** Датчик молчит дольше секунды — это дырка в данных, и молча её оставлять нельзя. */
@@ -431,7 +448,7 @@ function finish() {
   curLabel = LBL_PREP;
   recordingUI(false);
   releaseWake();
-  cueText('Grabación terminada', `${done.samples.length} muestras en ${done.seconds.toFixed(0)} s`);
+  cueText('Запись закончена', `${frames(done.samples.length)} за ${done.seconds.toFixed(0)} с`);
 
   sessions.unshift(done);
   while (sessions.length > SESSIONS_KEPT) sessions.pop();
@@ -444,7 +461,7 @@ function recordingUI(on) {
   el.free.hidden = on;
   el.stop.hidden = !on;
   document.body.classList.toggle('is-recording', on);
-  setStatus(on ? 'music' : 'idle', on ? 'Grabando' : 'En espera');
+  setStatus(on ? 'music' : 'idle', on ? 'Записываю' : 'Жду');
   if (on) cueText('…', '');
 }
 
@@ -475,15 +492,15 @@ document.addEventListener('visibilitychange', () => {
 // прибора. Скорость вращения не поза вовсе — она здесь, чтобы стало видно,
 // сколько дрожи вносит сама нога.
 const FEATS = [
-  { key: 'ax', name: 'ax', unit: 'm/s²', of: (s) => s[1] },
-  { key: 'ay', name: 'ay', unit: 'm/s²', of: (s) => s[2] },
-  { key: 'az', name: 'az', unit: 'm/s²', of: (s) => s[3] },
+  { key: 'ax', name: 'ax', unit: 'м/с²', of: (s) => s[1] },
+  { key: 'ay', name: 'ay', unit: 'м/с²', of: (s) => s[2] },
+  { key: 'az', name: 'az', unit: 'м/с²', of: (s) => s[3] },
   { key: 'angX', name: '∠x', unit: '°', of: (s) => axisAngle(s[1], s[1], s[2], s[3]) },
   { key: 'angY', name: '∠y', unit: '°', of: (s) => axisAngle(s[2], s[1], s[2], s[3]) },
   { key: 'angZ', name: '∠z', unit: '°', of: (s) => axisAngle(s[3], s[1], s[2], s[3]) },
   { key: 'beta', name: 'beta', unit: '°', of: (s) => s[10] },
   { key: 'gamma', name: 'gamma', unit: '°', of: (s) => s[11] },
-  { key: 'rot', name: 'giro', unit: '°/s', of: (s) => Math.hypot(s[7], s[8], s[9]) },
+  { key: 'rot', name: 'вращ.', unit: '°/с', of: (s) => Math.hypot(s[7], s[8], s[9]) },
 ];
 
 function stats(values) {
@@ -599,22 +616,24 @@ function median(xs) {
 function summary(session) {
   const a = analyse(session);
   const L = [];
-  L.push(`${session.mode === 'serie' ? 'Serie' : 'Libre'} · ${fecha(session.started)} · ${session.seconds.toFixed(0)} s`
-    + ` · ${session.samples.length} muestras · ${session.hz} Hz`);
-  L.push(session.mode === 'serie'
-    ? `Posturas: ${session.labels[LBL_FIRST]} / ${session.labels[LBL_FIRST + 1]}`
-      + ` · ${session.cfg.cycles} ciclos × ${session.cfg.hold} s (transición ${session.cfg.settle} s)`
-    : `Etiqueta: ${session.labels[LBL_FIRST]}`);
+  L.push(`${session.mode === 'free' ? 'Свободная' : 'Серия'} · ${when(session.started)}`
+    + ` · ${session.seconds.toFixed(0)} с · ${frames(session.samples.length)} · ${session.hz} Гц`);
+  L.push(session.mode !== 'free'
+    ? `Позы: ${session.labels[LBL_FIRST]} / ${session.labels[LBL_FIRST + 1]}`
+      + ` · ${session.cfg.cycles} ${plural(session.cfg.cycles, 'цикл', 'цикла', 'циклов')}`
+      + ` × ${session.cfg.hold} с (переход ${session.cfg.settle} с)`
+    : `Метка: ${session.labels[LBL_FIRST]}`);
   if (session.gaps.length) {
     const worst = Math.max(...session.gaps.map(([s, e]) => e - s)) / 1000;
-    L.push(`¡Ojo! El sensor ha callado ${session.gaps.length} vez/veces, la peor ${worst.toFixed(1)} s:`);
-    L.push('la pantalla se apagó y a esta grabación le faltan trozos.');
+    L.push(`Внимание: датчик молчал ${session.gaps.length} `
+      + `${plural(session.gaps.length, 'раз', 'раза', 'раз')}, дольше всего ${worst.toFixed(1)} с:`);
+    L.push('экран погас, и в этой записи не хватает кусков.');
   }
   L.push('');
 
-  L.push('señal'.padEnd(10)
+  L.push('сигнал'.padEnd(10)
     + a.used.map((i) => session.labels[i].slice(0, 15).padStart(16)).join('')
-    + (a.used.length === 2 ? 'separa'.padStart(8) : ''));
+    + (a.used.length === 2 ? 'разрыв'.padStart(8) : ''));
   for (const row of a.rows) {
     let line = `${row.f.name} ${row.f.unit}`.padEnd(10);
     for (const li of a.used) {
@@ -625,10 +644,10 @@ function summary(session) {
     L.push(line);
   }
   L.push('');
-  L.push('Media ± desviación de la señal en bruto.');
+  L.push('Среднее ± разброс сырого сигнала.');
   if (a.used.length === 2) {
-    L.push('«Separa» = distancia entre las medias dividida por las dos');
-    L.push('desviaciones, sobre la señal suavizada.');
+    L.push('«Разрыв» — расстояние между средними, делённое на оба');
+    L.push('разброса, по сглаженному сигналу.');
   }
 
   if (a.best) {
@@ -642,12 +661,12 @@ function summary(session) {
     }
     const tr = transitions(session, a.best, a.w, a.used);
     L.push('');
-    L.push(`Mejor señal: ${f.name} suavizada ${SMOOTH_SEC} s (${a.w} muestras)`);
-    L.push(`  umbral      ${sp.thr.toFixed(2)} ${f.unit} · «${low}» por debajo`);
-    L.push(`  histéresis  ±${(band / 2).toFixed(2)} ${f.unit} · ${inBand} muestras dentro de la banda`);
-    L.push(`  errores     ${errors.wrong} de ${errors.total}`
+    L.push(`Лучший сигнал: ${f.name}, сглаженный ${SMOOTH_SEC} с (${frames(a.w)})`);
+    L.push(`  порог       ${sp.thr.toFixed(2)} ${f.unit} · «${low}» ниже порога`);
+    L.push(`  гистерезис  ±${(band / 2).toFixed(2)} ${f.unit} · ${frames(inBand)} внутри полосы`);
+    L.push(`  ошибки      ${errors.wrong} из ${errors.total}`
       + ` (${(errors.wrong / (errors.total || 1) * 100).toFixed(1)} %)`);
-    if (tr.length) L.push(`  transición  ${median(tr).toFixed(1)} s de mediana, ${Math.max(...tr).toFixed(1)} s la peor`);
+    if (tr.length) L.push(`  переход     ${median(tr).toFixed(1)} с медиана, ${Math.max(...tr).toFixed(1)} с худший`);
   }
   L.push('');
   L.push(session.ua);
@@ -664,14 +683,14 @@ function renderSessions() {
     box.className = 'rec';
     box.innerHTML = `
       <div class="rec-head">
-        <b>${esc(s.mode === 'serie' ? 'Serie' : 'Libre')} · ${esc(fecha(s.started))}</b>
-        <span>${s.samples.length} muestras · ${s.seconds.toFixed(0)} s</span>
+        <b>${esc(s.mode === 'free' ? 'Свободная' : 'Серия')} · ${esc(when(s.started))}</b>
+        <span>${frames(s.samples.length)} · ${s.seconds.toFixed(0)} с</span>
       </div>
       <pre class="rec-text"></pre>
       <div class="rec-actions">
-        <button class="btn btn--ghost btn--sm" data-act="copy">Copiar resumen</button>
-        <button class="btn btn--ghost btn--sm" data-act="json">Descargar JSON</button>
-        <button class="btn btn--ghost btn--sm" data-act="drop">Borrar</button>
+        <button class="btn btn--ghost btn--sm" data-act="copy">Скопировать сводку</button>
+        <button class="btn btn--ghost btn--sm" data-act="json">Скачать JSON</button>
+        <button class="btn btn--ghost btn--sm" data-act="drop">Удалить</button>
       </div>`;
     const text = summary(s);
     box.querySelector('.rec-text').textContent = text;
@@ -690,16 +709,16 @@ async function copy(text, box) {
   const btn = box.querySelector('[data-act="copy"]');
   try {
     await navigator.clipboard.writeText(text);
-    btn.textContent = 'Copiado';
+    btn.textContent = 'Скопировано';
   } catch {
     // Буфер закрыт политикой браузера — выделяем текст, дальше руками.
     const range = document.createRange();
     range.selectNodeContents(box.querySelector('.rec-text'));
     getSelection().removeAllRanges();
     getSelection().addRange(range);
-    btn.textContent = 'Cópielo a mano';
+    btn.textContent = 'Выделено, копируйте';
   }
-  setTimeout(() => { btn.textContent = 'Copiar resumen'; }, 2000);
+  setTimeout(() => { btn.textContent = 'Скопировать сводку'; }, 2000);
 }
 
 function download(s) {
@@ -739,14 +758,14 @@ function bindText(id, key) {
 bindText('setNameA', 'nameA');
 bindText('setNameB', 'nameB');
 bindText('setFreeName', 'freeName');
-bindRange('setPrep', 'prep', (v) => `${v} s`);
-bindRange('setSettle', 'settle', (v) => `${v.toFixed(1)} s`);
-bindRange('setHold', 'hold', (v) => `${v} s`);
+bindRange('setPrep', 'prep', (v) => `${v} с`);
+bindRange('setSettle', 'settle', (v) => `${v.toFixed(1)} с`);
+bindRange('setHold', 'hold', (v) => `${v} с`);
 bindRange('setCycles', 'cycles', (v) => String(v));
 el.planLine.textContent = planText();
 
-el.start.onclick = () => begin('serie');
-el.free.onclick = () => begin('libre');
+el.start.onclick = () => begin('series');
+el.free.onclick = () => begin('free');
 el.stop.onclick = () => finish();
 el.permBtn.onclick = askPermission;
 el.clearAll.onclick = () => {
@@ -757,6 +776,6 @@ el.clearAll.onclick = () => {
 };
 
 renderSessions();
-setStatus('idle', 'En espera');
+setStatus('idle', 'Жду');
 if (needsPermission) el.perm.hidden = false;
 else startSensors();
