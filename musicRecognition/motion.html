@@ -1,0 +1,160 @@
+<!doctype html>
+<!-- Временная страница: снять данные акселерометра под включение ногой.
+     Уедет из проекта вместе с js/motion.js, как только пороги будут известны. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Registro del sensor</title>
+<meta name="description" content="Herramienta temporal: graba el acelerómetro con las posturas ya etiquetadas.">
+<meta name="theme-color" content="#0b0d12">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <h1>Registro del sensor</h1>
+  </div>
+  <div class="topbar-right">
+    <a class="counter" href="./index.html">← volver</a>
+    <span class="pill pill--idle" id="statusPill">En espera</span>
+  </div>
+</header>
+
+<main>
+  <!-- Управление. Команду видно крупно: пока телефон в руке, по ней сверяются,
+       а в кармане она всё равно приходит вибрацией. -->
+  <section class="card control">
+    <div class="control-row">
+      <button class="btn btn--primary" id="startBtn">Empezar la serie</button>
+      <button class="btn" id="freeBtn">Grabación libre</button>
+      <button class="btn btn--stop" id="stopBtn" hidden>Parar</button>
+    </div>
+    <p class="notice" id="permNotice" hidden>
+      Este navegador pide permiso para los sensores de movimiento:
+      <button class="btn btn--sm" id="permBtn">Permitir</button>
+    </p>
+    <p class="error" id="errorBox" hidden></p>
+    <div class="cue">
+      <b id="cueLine">—</b>
+      <span id="cueSub">Una vibración larga: primera postura. Dos cortas: la segunda.</span>
+    </div>
+  </section>
+
+  <!-- Живые значения: до всякой статистики надо увидеть, что разница вообще есть. -->
+  <details class="card" open>
+    <summary>Ahora mismo<span class="phase" id="liveHz">—</span></summary>
+    <canvas id="trace" height="90" aria-label="Últimos 20 segundos de los tres ejes"></canvas>
+    <div class="live">
+      <div><span>ax</span><b id="vAx">—</b></div>
+      <div><span>ay</span><b id="vAy">—</b></div>
+      <div><span>az</span><b id="vAz">—</b></div>
+      <div><span>∠x</span><b id="vAngX">—</b></div>
+      <div><span>∠y</span><b id="vAngY">—</b></div>
+      <div><span>∠z</span><b id="vAngZ">—</b></div>
+      <div><span>giro</span><b id="vRot">—</b></div>
+      <div><span>beta</span><b id="vBeta">—</b></div>
+      <div><span>gamma</span><b id="vGamma">—</b></div>
+    </div>
+    <p class="hint">
+      Verde ax, amarillo ay, rojo az, escala ±12 m/s². Los ángulos son la
+      inclinación de cada eje respecto a la gravedad: no dependen de con cuánta
+      fuerza se mueva el teléfono, solo de cómo está girado.
+    </p>
+  </details>
+
+  <!-- Как записывать -->
+  <details class="card">
+    <summary>Cómo grabar</summary>
+    <p class="hint">
+      Pulse «Empezar la serie», guarde el teléfono donde vaya a llevarlo de
+      verdad y siéntese como se sentará en el concurso. Tres vibraciones cortas
+      avisan de que empieza. Luego el teléfono va pidiendo posturas: una
+      vibración larga es la primera, dos cortas la segunda. Cámbiela en cuanto la
+      note y no se mueva hasta la siguiente: los primeros segundos tras cada
+      orden se descartan, son el propio movimiento.
+    </p>
+    <p class="hint">
+      Haga dos o tres series seguidas <b>sacando el teléfono del bolsillo y
+      volviéndolo a meter entre una y otra</b>. Si los números de cada serie
+      salen parecidos, el interruptor puede mirar valores absolutos; si bailan,
+      habrá que calibrar la postura de apagado cada vez que se arranque.
+    </p>
+    <p class="hint">
+      Y una «Grabación libre» andando, y otra sentado normal moviéndose a su
+      aire: sirven para ver si el umbral se dispara donde nadie se lo ha pedido.
+    </p>
+    <p class="hint">
+      La pantalla se mantiene encendida durante la grabación: si se apaga, el
+      sensor deja de enviar y la grabación sale con agujeros. Se avisa de ellos
+      en el resumen.
+    </p>
+  </details>
+
+  <!-- Настройки серии -->
+  <details class="card settings">
+    <summary>Ajustes de la serie</summary>
+    <div class="settings-grid">
+      <label class="field">
+        <span class="field-label">Primera postura</span>
+        <input type="text" id="setNameA" spellcheck="false" autocomplete="off">
+        <small>Una vibración larga. Aquí va la postura de reposo, la de «apagado».</small>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Segunda postura</span>
+        <input type="text" id="setNameB" spellcheck="false" autocomplete="off">
+        <small>Dos vibraciones cortas. La postura que encenderá la escucha.</small>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Preparación — <b id="setPrepVal"></b></span>
+        <input type="range" id="setPrep" min="5" max="30" step="1">
+        <small>Tiempo para guardar el teléfono y sentarse antes de la primera orden.</small>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Transición — <b id="setSettleVal"></b></span>
+        <input type="range" id="setSettle" min="1" max="5" step="0.5">
+        <small>Lo que se descarta tras cada orden. Corto de más y el propio
+          movimiento entra en la estadística de la postura.</small>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Postura sostenida — <b id="setHoldVal"></b></span>
+        <input type="range" id="setHold" min="3" max="15" step="1">
+        <small>Estos segundos son los datos. Sostener la postura más tiempo del
+          que se sostendrá de verdad no ayuda: interesa el temblor real.</small>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Ciclos — <b id="setCyclesVal"></b></span>
+        <input type="range" id="setCycles" min="1" max="8" step="1">
+        <small id="planLine"></small>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Etiqueta de la grabación libre</span>
+        <input type="text" id="setFreeName" spellcheck="false" autocomplete="off">
+        <small>Cómo se llamará lo que grabe sin órdenes: «andando», «sentado normal».</small>
+      </label>
+    </div>
+  </details>
+
+  <!-- Записи -->
+  <details class="card" open>
+    <summary>Grabaciones</summary>
+    <div class="history-head">
+      <button class="btn btn--ghost btn--sm" id="clearAllBtn">Borrar todas</button>
+    </div>
+    <div id="recList"></div>
+    <p class="empty" id="recEmpty">Todavía no se ha grabado nada.</p>
+  </details>
+</main>
+
+<script type="module" src="./js/motion.js"></script>
+</body>
+</html>

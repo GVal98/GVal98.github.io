@@ -422,6 +422,63 @@ body.is-blank { overflow: hidden; }
 .blank-bar i { display: block; height: 100%; width: 0; background: #6a6a6a; }
 .blank.is-white .blank-bar i { background: #9a9a9a; }
 
+/* --- Запись движения: временный блок --- */
+/* Страница motion.html снимает данные акселерометра под будущее включение
+   ногой. И она, и эти правила уедут из проекта, как только пороги будут
+   известны, — поэтому всё держится на уже готовых .card, .btn и .field,
+   а своего здесь ровно то, чего в приложении нет. */
+
+.temp-link { text-align: center; }
+.temp-link a { color: var(--muted); text-decoration: underline dotted; text-underline-offset: 3px; }
+.temp-link a:hover { color: var(--accent); }
+
+/* Команду читают на бегу, поэтому она крупная: в кармане её даёт вибрация,
+   но пока телефон в руке — сверяются глазами. */
+.cue { margin-top: 14px; }
+.cue b { display: block; font-size: 22px; font-weight: 650; letter-spacing: -0.01em; }
+.cue span { display: block; margin-top: 3px; font-size: 12.5px; color: var(--muted); }
+body.is-recording .cue b { color: var(--accent); }
+
+#trace {
+  width: 100%;
+  height: 90px;
+  display: block;
+  margin-top: 14px;
+  background: var(--card-2);
+  border-radius: 10px;
+}
+
+.live {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(74px, 1fr));
+  gap: 8px;
+}
+.live div { background: var(--card-2); border-radius: 8px; padding: 6px 8px; }
+.live span { display: block; font-size: 11px; color: var(--muted); }
+.live b { font-size: 14px; font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.rec { border-top: 1px solid var(--line); padding: 12px 0 4px; }
+.rec:first-child { border-top: none; }
+.rec-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 13px; }
+.rec-head span { color: var(--muted); font-size: 12px; }
+/* Резюме — колонки, выровненные пробелами: моноширинный шрифт здесь не
+   украшение, а единственное, что держит таблицу. Строки не переносятся,
+   иначе колонки разъедутся, — поэтому длинные уезжают вбок. */
+.rec-text {
+  margin: 10px 0;
+  padding: 10px;
+  background: var(--card-2);
+  border-radius: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text);
+  overflow-x: auto;
+  white-space: pre;
+}
+.rec-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
 @media (max-width: 520px) {
   .now-inner { flex-direction: column; }
   .now-art { width: 88px; height: 88px; }
