@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Reconocimiento de música</title>
-<meta name="description" content="Escucha el micrófono, detecta por sí solo el comienzo de una canción y la reconoce con AudD.">
+<title>Respuestas del concurso</title>
+<meta name="description" content="Escucha el micrófono y contesta las preguntas del concurso: reconoce las canciones con AudD, responde las demás con un modelo y marca la respuesta vibrando.">
 <meta name="theme-color" content="#0b0d12">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
 <link rel="stylesheet" href="./style.css">
@@ -14,10 +14,10 @@
 <header class="topbar">
   <div class="brand">
     <span class="brand-mark" aria-hidden="true"></span>
-    <h1>Reconocimiento de música</h1>
+    <h1>Respuestas del concurso</h1>
   </div>
   <div class="topbar-right">
-    <span class="counter" id="requestCounter" title="Solicitudes a AudD en esta sesión">0 solicitudes</span>
+    <span class="counter" id="requestCounter" title="Solicitudes de reconocimiento en esta sesión">0 solicitudes</span>
     <span class="pill pill--idle" id="statusPill">Detenido</span>
   </div>
 </header>
@@ -36,6 +36,12 @@
       <a href="https://dashboard.audd.io/" target="_blank" rel="noopener">dashboard.audd.io</a>
       y péguela en «Ajustes», más abajo. La clave se guarda en este navegador y no se
       envía a ningún sitio salvo al propio api.audd.io.
+    </p>
+    <p class="notice" id="orTokenNotice" hidden>
+      Hace falta una clave de OpenRouter: créela en
+      <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a>
+      y péguela en «Ajustes», más abajo. Se guarda en este navegador y no se envía
+      a ningún sitio salvo al propio openrouter.ai.
     </p>
     <p class="error" id="errorBox" hidden></p>
   </section>
@@ -59,6 +65,16 @@
       un día para otro se pierde entre lo que cambia el propio bolsillo—, sino el
       momento en que pasa de una a otra. Por eso hay que calibrar antes: una vez
       levantada y bajada la pierna, para que sepa hacia dónde gira.
+    </p>
+    <p class="hint">
+      No todas las preguntas de un concurso son canciones. En «Ajustes» se elige qué
+      se pregunta: una canción, que reconoce AudD por su huella, o una pregunta hablada
+      —una fecha, un nombre, una capital—, que se manda entera a un modelo y vuelve
+      contestada. El fragmento se recoge igual en los dos casos, y la respuesta llega
+      igual: vibrando. Lo que llega al motor son las primeras letras de la respuesta,
+      así que al modelo se le pide de entrada que conteste con una sola palabra —eso ya
+      viene puesto en «Ajustes» y ahí se puede cambiar—. Los años y las cifras no se
+      distinguen al tacto y hay que mirarlos en la pantalla.
     </p>
     <p class="hint">
       «Ocultar pantalla» retira la página entera: la aplicación sigue escuchando y
@@ -129,14 +145,50 @@
   <details class="card settings">
     <summary>Ajustes</summary>
 
-    <h3 class="settings-head">Reconocimiento</h3>
-    <div class="settings-grid">
+    <!-- Два вопроса разной природы, и отвечают на них разные сервисы: у трека
+         есть отпечаток, у «в каком году» его нет. Переключатель стоит первым,
+         потому что от него зависит, какой ключ вообще нужен. -->
+    <h3 class="settings-head">Qué se pregunta</h3>
+    <div class="modes" role="radiogroup" aria-label="Qué se pregunta">
+      <label class="mode">
+        <input type="radio" name="ask" id="setAskSong">
+        <span>Una canción</span>
+      </label>
+      <label class="mode">
+        <input type="radio" name="ask" id="setAskQuestion">
+        <span>Una pregunta hablada</span>
+      </label>
+    </div>
+    <p class="hint" id="setAskHint"></p>
+
+    <div class="settings-grid" id="songSettings">
       <label class="field">
         <span class="field-label">Clave de API de AudD</span>
         <input type="text" id="setToken" spellcheck="false" autocomplete="off"
                placeholder="pegue la clave de dashboard.audd.io">
         <small>Se guarda solo en el localStorage de este navegador: hay que
           introducirla en cada dispositivo por separado.</small>
+      </label>
+    </div>
+
+    <div class="settings-grid" id="questionSettings">
+      <label class="field">
+        <span class="field-label">Clave de API de OpenRouter</span>
+        <input type="text" id="setOrToken" spellcheck="false" autocomplete="off"
+               placeholder="pegue la clave de openrouter.ai/keys">
+        <small>Se guarda solo en el localStorage de este navegador, igual que la de
+          AudD. Aquí no hay cuota mensual: se paga por pregunta, y una de veinte
+          segundos cuesta menos de una décima de céntimo de dólar.</small>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Qué se le pide al modelo</span>
+        <!-- Единственное поле настроек, куда пишут фразу, а не строку: в одну
+             строку её хвост уезжает за край ровно там, где и решается длина
+             ответа. Значение подставляет js/app.js — здесь пусто нарочно,
+             у textarea содержимое тега и есть значение. -->
+        <textarea id="setSystem" rows="6" spellcheck="false" autocomplete="off"></textarea>
+        <small id="setSystemHint"></small>
       </label>
     </div>
 

@@ -13,10 +13,17 @@ export const ERRORS = {
   901: 'Se ha agotado el límite de solicitudes de la clave',
 };
 
+// Само не рассосётся: неверный ключ верным не станет, а выбранный лимит до
+// конца раунда не восстановится. Повторять такое — выбрасывать клипы в пустоту.
+// Знание это сервисное, поэтому и живёт здесь, рядом с кодами, а не у того,
+// кто ловит ошибку: у второго сервиса свои коды и тот же самый вопрос.
+const FATAL = new Set([900, 901]);
+
 export class AudDError extends Error {
   constructor(code, message) {
     super(message);
     this.code = code;
+    this.fatal = FATAL.has(code);
   }
 }
 

@@ -130,7 +130,8 @@ body.is-music .brand-mark { animation: pulse 1.4s ease-in-out infinite; }
 .field-label { font-size: 12px; color: var(--muted); font-weight: 600; }
 .field small { font-size: 11.5px; color: var(--muted); line-height: 1.45; }
 
-input[type="text"] {
+input[type="text"],
+textarea {
   background: var(--card-2);
   border: 1px solid var(--line);
   color: var(--text);
@@ -140,7 +141,12 @@ input[type="text"] {
   font-size: 14px;
   width: 100%;
 }
-input:focus-visible { outline: 2px solid var(--accent-dim); outline-offset: 1px; }
+/* Тянется только по высоте: вширь поле вылезло бы из колонки настроек, а сетка
+   там из `minmax(240px, 1fr)` и подвинуться ему некуда. Нижняя граница — чтобы
+   поле нельзя было сжать в щель, из которой не видно и первой строки. */
+textarea { resize: vertical; min-height: 60px; }
+input:focus-visible,
+textarea:focus-visible { outline: 2px solid var(--accent-dim); outline-offset: 1px; }
 
 input[type="range"] { width: 100%; accent-color: var(--accent); }
 
@@ -312,6 +318,9 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .h-body { min-width: 0; flex: 1; }
 .h-title { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .h-artist { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Ответ на обычный вопрос — не название в одну строку, а фраза. Обрезать её
+   многоточием значит спрятать ровно то, ради чего запрос и делался. */
+.history-list li.is-answer .h-title { white-space: normal; overflow: visible; }
 .h-time { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; flex: none; }
 .h-time a { color: var(--muted); }
 .empty { color: var(--muted); font-size: 13px; margin: 8px 0 0; }

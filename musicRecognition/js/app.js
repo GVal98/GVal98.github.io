@@ -2,6 +2,7 @@ import { AudioCapture } from './audio.js';
 import { MusicDetector, MusicGate } from './detector.js';
 import { PoseGate, PoseSensor } from './pose.js';
 import { recognize, trackKey, artworkUrl, links, AudDError } from './audd.js';
+import { ask, SYSTEM, OLD_SYSTEM, AskError } from './openrouter.js';
 import * as morse from './morse.js';
 import { ARTISTS } from './artists.js';
 
@@ -11,7 +12,22 @@ import { ARTISTS } from './artists.js';
 // попадёт пауза и начало следующего.
 const DEFAULTS = {
   v: 3,              // версия набора настроек, см. loadSettings
+  // О чём вопрос. Трек-вопрос узнаёт AudD по отпечатку; вопрос, который не про
+  // музыку — «в каком году», «кто написал», «сколько лун», — отпечатком не
+  // берётся вовсе, и на него отвечает модель, которой тот же клип уходит
+  // целиком. Всё остальное от этого не меняется: нога так же открывает и
+  // закрывает вопрос, фрагмент так же режется из буфера, ответ так же уходит
+  // в мотор морзянкой. Меняется ровно то, кому уходит клип и что приходит
+  // обратно — трек или текст.
+  ask: 'song',       // 'song' | 'question'
   token: '',         // пользователь вводит свой; хранится только в localStorage
+  orToken: '',       // ключ OpenRouter, там же и так же
+  // Что просят у модели. В настройках, а не в клиенте, ровно из-за мотора:
+  // до него доходят первые morseLetters букв ответа, и «Париж» помещается
+  // целиком, а «Столица Франции — Париж» приходит как STOLI. Значит, длину
+  // ответа задаёт эта строка, а не ползунок, — и раз она решает, читается
+  // ответ на ощупь или нет, ей место среди настроек.
+  system: SYSTEM,
   threshold: 0.35,   // середина коридора между тишиной и музыкой по замерам
   // Отправка приходит на (clip + LEAD_IN) секунде. На треке в 10 секунд это
   // 9-я — то есть секунда запаса на то, что начало музыки замечено не мгновенно:
@@ -125,7 +141,7 @@ const el = {
   now: $('nowCard'), nowArt: $('nowArt'), nowArtEmpty: $('nowArtEmpty'), nowKicker: $('nowKicker'),
   nowTitle: $('nowTitle'), nowArtist: $('nowArtist'), nowMeta: $('nowMeta'), nowLinks: $('nowLinks'),
   historyList: $('historyList'), historyEmpty: $('historyEmpty'), clearHistory: $('clearHistoryBtn'),
-  log: $('logList'), tokenNotice: $('tokenNotice'),
+  log: $('logList'), tokenNotice: $('tokenNotice'), orTokenNotice: $('orTokenNotice'),
   blankBtn: $('blankBtn'), blank: $('blank'), blankState: $('blankState'), blankBar: $('blankBar'),
 };
 
@@ -165,9 +181,16 @@ function loadSettings() {
     // Длина фрагмента и порог паузы сменили смысл — они подобраны под короткий
     // трек-вопрос. Сохранённые с прошлой версии значения перебили бы новые
     // умолчания, и на своём же устройстве было бы не понять, почему ничего не
-    // изменилось. Ключ при этом терять не за что.
-    if (saved.v !== DEFAULTS.v) return { ...DEFAULTS, token: saved.token || '' };
-    return { ...DEFAULTS, ...saved };
+    // изменилось. Ключи при этом теряются зря: они не настройки, а то, что
+    // выдано сервисом, и умолчания у них не существует.
+    if (saved.v !== DEFAULTS.v) {
+      return { ...DEFAULTS, token: saved.token || '', orToken: saved.orToken || '' };
+    }
+    const merged = { ...DEFAULTS, ...saved };
+    // Подсказку модели, которую не трогали руками, обновляем вместе с кодом:
+    // список прежних умолчаний ведёт сам клиент, см. OLD_SYSTEM.
+    if (OLD_SYSTEM.includes(merged.system)) merged.system = DEFAULTS.system;
+    return merged;
   } catch { return { ...DEFAULTS }; }
 }
 function saveSettings() {
@@ -233,6 +256,26 @@ function showError(text) {
 // которым некому открыть вопрос.
 const poseActive = () => settings.pose && Boolean(settings.poseAxis);
 
+// Вопрос не про музыку: отвечает не AudD, а модель. Проверка нужна во многих
+// местах и всегда об одном — кому уходит клип и чем считать то, что вернулось.
+const asksQuestion = () => settings.ask === 'question';
+
+/** Ключ того сервиса, который сейчас отвечает: их два, а нужен всегда один. */
+const activeToken = () => (asksQuestion() ? settings.orToken : settings.token);
+
+// Один идентификатор на запись: часы стены плюс монотонные. Два ответа,
+// пришедшие в одну миллисекунду, разойдутся вторым слагаемым.
+const entryId = () => `${Date.now()}-${Math.round(performance.now())}`;
+
+// Что из записи уходит в мотор: у песни — имя исполнителя, у обычного вопроса
+// — сам ответ. Название трека мотору не достаётся: имена исполнителей в квизе
+// спрашивают чаще, а на ощупь помещается только одно из двух.
+const buzzable = (entry) => (entry?.kind === 'answer' ? entry.title : entry?.artist);
+
+// Запись одной строкой — для журнала и скрытого экрана. У ответа исполнителя
+// нет, и приписывать к нему пустое место через тире нечестно.
+const entryLine = (entry) => (entry?.kind === 'answer' ? entry.title : `${entry.artist} — ${entry.title}`);
+
 /* --------------------------------------------------------------- статус в UI */
 
 function setStatus(kind, text) {
@@ -241,7 +284,7 @@ function setStatus(kind, text) {
 }
 function refreshStatus() {
   if (!running) return setStatus('idle', 'Detenido');
-  if (inFlight) return setStatus('busy', 'Reconociendo…');
+  if (inFlight) return setStatus('busy', asksQuestion() ? 'Preguntando…' : 'Reconociendo…');
   // С включением ногой «suena música» ничего не значит: музыка могла играть всю
   // паузу между вопросами. Значение имеет нога, её и показываем.
   if (poseActive()) return poseGate?.up
@@ -255,19 +298,25 @@ function refreshStatus() {
 
 /** Без ключа слушать бессмысленно — ведём к полю, а не молча падаем на первом запросе. */
 function promptForToken() {
-  showError('Primero pegue la clave de AudD en los ajustes.');
+  showError(asksQuestion()
+    ? 'Primero pegue la clave de OpenRouter en los ajustes.'
+    : 'Primero pegue la clave de AudD en los ajustes.');
   document.querySelector('.settings').open = true;
-  const input = $('setToken');
+  const input = $(asksQuestion() ? 'setOrToken' : 'setToken');
   input.scrollIntoView({ block: 'center', behavior: 'smooth' });
   input.focus();
 }
 
+// Ключей два, и не хватать может любого. Показываем тот, без которого нечего
+// делать сейчас: второй сервис в этом режиме не спрашивают вовсе, и требовать
+// его ключ значит просить то, что ни на что не влияет.
 function updateTokenNotice() {
-  el.tokenNotice.hidden = Boolean(settings.token);
+  el.tokenNotice.hidden = asksQuestion() || Boolean(settings.token);
+  el.orTokenNotice.hidden = !asksQuestion() || Boolean(settings.orToken);
 }
 
 async function start() {
-  if (!settings.token) return promptForToken();
+  if (!activeToken()) return promptForToken();
   showError('');
   // Датчик поднимается раньше микрофона: на iOS разрешение на движение дают
   // только из жеста, а к концу запроса микрофона жест уже протух.
@@ -559,7 +608,11 @@ function scheduleRecheck(s) {
   // видит, где кончился один вопрос и начался следующий, и часы — его
   // единственный способ это заметить. У ноги граница проведена рукой, а
   // второй запрос ушёл бы тем же куском за тем же ответом.
-  s.nextCheckAt = s.closedAt || !settings.recheck ? Infinity : heard() + settings.recheck;
+  // Обычный вопрос — такое же место, и по той же причине с другой стороны:
+  // переспрос отдал бы модели следующие секунды зала, где вопроса уже нет, а
+  // ведущий читает по нему ответ. Платить за это ещё одним запросом не за что.
+  s.nextCheckAt = s.closedAt || asksQuestion() || !settings.recheck
+    ? Infinity : heard() + settings.recheck;
 }
 
 function endSession(why = 'la música ha cesado') {
@@ -750,7 +803,10 @@ async function runRecognition() {
   // втором расписание уже переставлено под следующий вопрос. Ответ и там и там
   // относится к прошлому куску, и трогать по нему текущее расписание нельзя.
   const s = session;
-  const req = { s, seg: s.segmentAt, segWall: s.segmentAtWall };
+  // Режим тоже снимается слепком: переключатель щёлкают и посреди полёта, а
+  // ответ AudD, разобранный как ответ модели, лёг бы в историю записью не того
+  // вида.
+  const req = { s, seg: s.segmentAt, segWall: s.segmentAtWall, question: asksQuestion() };
   req.live = () => s === session && s.segmentAt === req.seg;
 
   // Окно фрагмента — по аудиочасам: ими размечен кольцевой буфер.
@@ -813,26 +869,34 @@ async function runRecognition() {
   try {
     // Без таймаута повисший fetch держит inFlight до собственного таймаута
     // браузера — это минуты, за которые трек успевает кончиться, а приложение
-    // всё это время не делает ни одной проверки.
-    const result = await recognize(clip.blob, settings.token, {
-      signal: AbortSignal.timeout?.(REQUEST_TIMEOUT * 1000),
-    });
+    // всё это время не делает ни одной проверки. Обеим веткам он один и тот же:
+    // ждать модель дольше, чем базу отпечатков, незачем — вопрос за это время
+    // кончится и там и там.
+    const signal = AbortSignal.timeout?.(REQUEST_TIMEOUT * 1000);
+    // Клип уходит один и тот же; различается только, кто отвечает и чем —
+    // треком или текстом.
+    const answer = req.question
+      ? await ask(clip.blob, settings.orToken, { signal, system: settings.system })
+      : await recognize(clip.blob, settings.token, { signal });
     requests++;
     el.counter.textContent = `${requests} ${plural(requests, 'solicitud', 'solicitudes')}`;
-    if (result) handleMatch(result, req);
-    else handleNoMatch(req);
+    if (!answer) handleNoMatch(req);
+    else if (req.question) handleAnswer(answer, req);
+    else handleMatch(answer, req);
   } catch (e) {
+    const who = req.question ? 'OpenRouter' : 'AudD';
     log('err',
-      e instanceof AudDError ? `AudD: ${e.message}`
-      : e.name === 'TimeoutError' ? `AudD no ha respondido en ${REQUEST_TIMEOUT} s`
+      e instanceof AudDError || e instanceof AskError ? `${who}: ${e.message}`
+      : e.name === 'TimeoutError' ? `${who} no ha respondido en ${REQUEST_TIMEOUT} s`
       : `Red: ${e.message}`);
     // Неверный ключ и исчерпанный лимит сами не рассосутся — повторять их
-    // значит просто выкидывать клипы в пустоту до конца раунда.
-    const fatal = e instanceof AudDError && (e.code === 900 || e.code === 901);
+    // значит просто выкидывать клипы в пустоту до конца раунда. Какие коды
+    // такие, знает клиент сервиса: у AudD и у OpenRouter они свои.
+    const fatal = e.fatal === true;
     showError(fatal ? e.message : '');
     // Ключ не работает или лимит выбран: запросов больше не будет, а на скрытом
     // экране это неотличимо от тишины в зале. Показываем, в чём дело.
-    if (fatal) exitBlank('AudD ha rechazado la solicitud: pantalla restaurada');
+    if (fatal) exitBlank(`${who} ha rechazado la solicitud: pantalla restaurada`);
     if (req.live()) {
       if (fatal) {
         s.nextCheckAt = Infinity;
@@ -851,19 +915,41 @@ async function runRecognition() {
 }
 
 function handleMatch(result, req) {
-  const { s } = req;
   const key = trackKey(result);
+  deliver(req, key, () => makeEntry(result, key, req),
+    `sigue siendo «${result.title}»`,
+    `${result.artist} — ${result.title}`);
+}
 
-  // Сравниваем с последним треком сессии, а не куска: разрыв мог случиться и
+/**
+ * Ответ модели. Ключ — сам текст: другого признака «тот же ответ или уже
+ * другой» у него нет, а он и есть весь ответ целиком.
+ */
+function handleAnswer(text, req) {
+  const key = text.toLowerCase();
+  deliver(req, key, () => makeAnswer(text, key, req), 'la misma respuesta', text);
+}
+
+/**
+ * Что делать с пришедшим ответом — одинаково для песни и для обычного вопроса:
+ * тот же он, что и прошлый, или новый; что закрыть в истории; что показать и
+ * что отстучать. Различается только то, чем набита запись, — это делает `make`,
+ * — и ключ, по которому она сверяется с прошлой: у песни это исполнитель
+ * с названием, у ответа сам ответ.
+ */
+function deliver(req, key, make, sameLog, freshLog) {
+  const { s } = req;
+
+  // Сравниваем с последним ответом сессии, а не куска: разрыв мог случиться и
   // внутри трека — на тихом проигрыше, на смене части. Тогда ответ придёт тот
   // же самый, и заводить на него вторую запись в истории не за что.
   if (s.entry && s.entry.key === key) {
-    log('ok', `sigue siendo «${result.title}»`);
+    log('ok', sameLog);
   } else {
     // Прошлый трек кончился на границе куска, а не сейчас: иначе его
     // длительность вобрала бы и паузу, и начало этого.
     if (s.entry) closeEntry(s.entry, req.segWall);
-    const entry = makeEntry(result, key, req);
+    const entry = make();
     s.entry = entry;
     current = entry;
     history.unshift(entry);
@@ -878,8 +964,8 @@ function handleMatch(result, req) {
     if (!req.live()) closeEntry(entry, s.closeWall || (s === session ? s.segmentAtWall : Date.now()));
     renderHistory();
     renderNow(true);
-    log('ok', `${result.artist} — ${result.title}`);
-    buzzArtist(entry.artist);
+    log('ok', freshLog);
+    buzzAnswer(buzzable(entry));
     refreshMorseHint(); // в подсказке настроек разбирается последнее имя, а не «Queen»
   }
 
@@ -889,14 +975,18 @@ function handleMatch(result, req) {
   }
 }
 
+/**
+ * Ответа нет: у AudD трека не нашлось в базе, у модели вернулся пустой текст.
+ */
 function handleNoMatch(req) {
-  log('warn', 'sin coincidencias');
+  log('warn', req.question ? 'el modelo no ha contestado nada' : 'sin coincidencias');
   if (!req.live()) return;
   const { s } = req;
   // Повтор берёт следующий кусок того же трека, где материал получше. У
   // закрытого ногой вопроса следующего куска нет: тот же самый вернул бы
-  // тот же ответ.
-  if (!s.closedAt && s.misses < MISS_RETRIES) {
+  // тот же ответ. И у молчащей модели повторять нечего: она молчит не потому,
+  // что ей досталось жидкое интро, а потому, что не разобрала сам вопрос.
+  if (!req.question && !s.closedAt && s.misses < MISS_RETRIES) {
     s.misses++;
     s.nextCheckAt = heard() + MISS_RETRY_SEC;
     log('', `probaré con otro fragmento dentro de ${MISS_RETRY_SEC} s`);
@@ -912,7 +1002,8 @@ function handleNoMatch(req) {
 // оказалось бы равно моменту распознавания либо началу уже следующего вопроса.
 function makeEntry(result, key, req) {
   return {
-    id: `${Date.now()}-${Math.round(performance.now())}`,
+    id: entryId(),
+    kind: 'song',
     key,
     title: result.title || 'Sin título',
     artist: result.artist || '',
@@ -927,11 +1018,30 @@ function makeEntry(result, key, req) {
   };
 }
 
+/**
+ * Ответ модели — та же запись истории, только пустая почти во всём: ни
+ * обложки, ни ссылок, ни исполнителя. Заголовком идёт сам ответ, он же уходит
+ * в мотор.
+ */
+function makeAnswer(text, key, req) {
+  return {
+    id: entryId(),
+    kind: 'answer',
+    key,
+    title: text,
+    artist: '',
+    startWall: req.segWall,
+    recognizedWall: Date.now(),
+    endWall: null,
+  };
+}
+
 /* -------------------------------------------------------------------- морзе */
 
 // Ответ приходит ровно тогда, когда смотреть на экран нельзя: вопрос ещё идёт,
-// телефон лежит экраном вниз или в кармане. Имя исполнителя стучится морзянкой,
-// и ответ узнаётся, не доставая телефон.
+// телефон лежит экраном вниз или в кармане. Ответ стучится морзянкой и
+// узнаётся, не доставая телефон: у трека-вопроса это имя исполнителя, у
+// обычного — то, что ответила модель.
 //
 // Мотор слышно микрофоном, и слышно сильно: на время морзянки приложение
 // глохнет целиком, см. «глухота» выше.
@@ -940,7 +1050,7 @@ let vibrationWarned = false;
 // `secret` — тренировка: имя загадано, и в журнале ему не место. Сама строка
 // там всё равно нужна, иначе молчащий мотор не отличить от шаблона, который
 // браузер не пропустил.
-function buzzArtist(artist, { secret = false } = {}) {
+function buzzAnswer(text, { secret = false } = {}) {
   if (!settings.morse) return;
   if (typeof navigator.vibrate !== 'function') {
     // Один раз за сессию: телефон от этого вибрировать не начнёт, а журнал
@@ -952,10 +1062,10 @@ function buzzArtist(artist, { secret = false } = {}) {
     return;
   }
 
-  const letters = spell(artist);
+  const letters = spell(text);
   if (!letters.length) {
     log('', secret ? 'no hay nada que marcar del nombre pensado'
-      : artist ? `«${artist}» no tiene nada que marcar` : 'artista desconocido, no habrá vibración');
+      : text ? `«${text}» no tiene nada que marcar` : 'no hay respuesta que marcar');
     return;
   }
 
@@ -1021,7 +1131,7 @@ function timing(twice = settings.morseTwice) {
 // на ощупь разбирается вернее выдуманного — его уже знаешь, и остаётся понять
 // не «что это», а «те ли это буквы». Своей истории нет — берём образец.
 function buzzSample() {
-  return current?.artist || history[0]?.artist || 'Queen';
+  return buzzable(current) || buzzable(history[0]) || 'Queen';
 }
 
 /* ------------------------------------------------------------------ тренировка */
@@ -1048,13 +1158,13 @@ function trainPick() {
 function trainBuzz() {
   if (!training.name) trainPick();
   renderTraining();
-  buzzArtist(training.name, { secret: !training.shown });
+  buzzAnswer(training.name, { secret: !training.shown });
 }
 
 function trainNext() {
   trainPick();
   renderTraining();
-  buzzArtist(training.name, { secret: true });
+  buzzAnswer(training.name, { secret: true });
 }
 
 function trainShow() {
@@ -1096,7 +1206,10 @@ function renderNow(fresh = false) {
   el.now.hidden = false;
 
   const live = session?.entry?.id === current.id;
-  el.nowKicker.textContent = live ? 'Sonando ahora' : 'Última canción';
+  const answer = current.kind === 'answer';
+  el.nowKicker.textContent = answer
+    ? (live ? 'Respuesta' : 'Última respuesta')
+    : (live ? 'Sonando ahora' : 'Última canción');
 
   if (current.art) {
     el.nowArt.src = current.art;
@@ -1105,6 +1218,9 @@ function renderNow(fresh = false) {
   } else {
     el.nowArt.hidden = true;
     el.nowArtEmpty.hidden = false;
+    // Заглушка обложки говорит, чего не хватает. У ответа обложки не бывает
+    // вовсе, и нота на её месте обещала бы песню.
+    el.nowArtEmpty.textContent = answer ? '?' : '♪';
   }
 
   el.nowTitle.textContent = current.title;
@@ -1131,9 +1247,13 @@ function renderNow(fresh = false) {
 function updateNowTimer() {
   if (!current || el.now.hidden) return;
   const live = session?.entry?.id === current.id;
-  const end = live ? Date.now() : (current.endWall ?? current.recognizedWall);
+  // Ответ не играет. Счётчик у него остановлен на длине вопроса — на том,
+  // сколько его читали, — а бегущее «sonando» значило бы, что вопрос всё ещё
+  // идёт, хотя кончился он ровно тогда, когда ушёл на распознавание.
+  const ticking = live && current.kind !== 'answer';
+  const end = ticking ? Date.now() : (current.endWall ?? current.recognizedWall);
   const played = (end - current.startWall) / 1000;
-  const tail = live ? `sonando ${dur(played)}` : `${clock(current.startWall)} · ${dur(played)}`;
+  const tail = ticking ? `sonando ${dur(played)}` : `${clock(current.startWall)} · ${dur(played)}`;
   const base = el.nowMeta.dataset.base;
   el.nowMeta.textContent = base ? `${base} · ${tail}` : tail;
 }
@@ -1141,18 +1261,19 @@ function updateNowTimer() {
 function renderHistory() {
   el.historyEmpty.hidden = history.length > 0;
   el.historyList.innerHTML = history.map((h) => {
-    const played = ((h.endWall ?? Date.now()) - h.startWall) / 1000;
+    const answer = h.kind === 'answer';
+    const played = ((h.endWall ?? (answer ? h.recognizedWall : Date.now())) - h.startWall) / 1000;
     const link = h.links?.[0];
     const time = link
       ? `<a href="${esc(link.url)}" target="_blank" rel="noopener">${clock(h.startWall)}</a>`
       : clock(h.startWall);
     const art = h.art
       ? `<img src="${esc(h.art)}" alt="" loading="lazy">`
-      : '<span class="h-art-empty">♪</span>';
-    return `<li>${art}
+      : `<span class="h-art-empty">${answer ? '?' : '♪'}</span>`;
+    return `<li${answer ? ' class="is-answer"' : ''}>${art}
       <div class="h-body">
         <div class="h-title">${esc(h.title)}</div>
-        <div class="h-artist">${esc(h.artist)}</div>
+        ${h.artist ? `<div class="h-artist">${esc(h.artist)}</div>` : ''}
       </div>
       <div class="h-time">${time}<br>${dur(played)}</div>
     </li>`;
@@ -1174,11 +1295,13 @@ function render() {
     : features.warmingUp
       ? 'midiendo el ruido de la sala'
       : session
-        ? (session.solved ? 'canción identificada'
+        ? (session.solved ? (asksQuestion() ? 'respuesta recibida' : 'canción identificada')
           : session.closedAt ? 'pregunta cerrada, esperando la respuesta'
           : poseActive() ? 'grabando la pregunta, la pierna está arriba'
+          : asksQuestion() ? 'se oye algo, reuniendo el fragmento'
           : 'suena música, reuniendo el fragmento')
-        : poseActive() ? 'esperando la pierna' : 'esperando música';
+        : poseActive() ? 'esperando la pierna'
+        : asksQuestion() ? 'esperando la pregunta' : 'esperando música';
 
   updateNowTimer();
 
@@ -1329,11 +1452,11 @@ function setThemeColor(color) {
 // из режима: коснулся, прочитал, отпустил.
 function blankStatus() {
   const state = !running ? 'detenido'
-    : inFlight ? 'reconociendo'
+    : inFlight ? (asksQuestion() ? 'preguntando' : 'reconociendo')
     : poseActive() ? (poseGate?.up ? 'pierna arriba' : 'pierna abajo')
     : gate?.playing ? 'suena música'
     : 'escuchando';
-  const last = current ? `${current.artist} — ${current.title}` : 'todavía no se ha reconocido nada';
+  const last = current ? entryLine(current) : 'todavía no se ha reconocido nada';
   return `${state} · ${last}`;
 }
 
@@ -1412,6 +1535,67 @@ function applyGate() {
 }
 
 /**
+ * Переключатель того, о чём вопрос. Устроен как и переключатель активации:
+ * два радио, у каждого свой ключ и свои поля. Приложение от него меняется
+ * ровно в одном месте — кому уходит клип, — а вся проводка вокруг остаётся
+ * той же самой.
+ */
+function bindAsk() {
+  const inputs = [[$('setAskSong'), 'song'], [$('setAskQuestion'), 'question']];
+  for (const [input, kind] of inputs) {
+    input.checked = settings.ask === kind;
+    input.addEventListener('change', () => {
+      if (!input.checked) return;
+      settings.ask = kind;
+      saveSettings();
+      applyAsk();
+    });
+  }
+}
+
+// Ключ второго сервиса и подсказка модели при выбранной песне не значат
+// ничего, и наоборот. Прятать их — то же самое, что прятать настройки слуха
+// при включении ногой: оставленные на виду, они читаются ручками, которые
+// почему-то ни на что не влияют.
+function refreshAskUI() {
+  $('songSettings').hidden = asksQuestion();
+  $('questionSettings').hidden = !asksQuestion();
+}
+
+/**
+ * Сменили, о чём спрашивать. Открытый вопрос уходит вместе с прежним сервисом:
+ * клип у него тот же, но отвечать на него теперь некому — и в историю он лёг бы
+ * записью не того вида, чем сломал бы и сравнение «тот же ответ или другой».
+ */
+async function applyAsk() {
+  refreshAskUI();
+  refreshAskHint();
+  refreshClipHint();
+  updateTokenNotice();
+  refreshStatus();
+  if (!running) return;
+  if (session) endSession('ha cambiado qué se pregunta: pregunta cerrada');
+  // Ключа второго сервиса может не быть вовсе. Слушать тогда не за чем: каждый
+  // вопрос кончался бы отказом, а на скрытом экране это выглядит тишиной.
+  if (!activeToken()) { await stop(); promptForToken(); }
+}
+
+// Что выбрано и что из этого следует. Два режима отличаются не только тем, кто
+// отвечает, но и тем, чем открывать вопрос: слух умеет замечать музыку, а не
+// голос, и на обычных вопросах он почти всегда не при делах.
+function refreshAskHint() {
+  $('setAskHint').textContent = asksQuestion()
+    ? 'La pregunta no es una canción: el fragmento se manda entero a un modelo y lo que vuelve es texto. '
+      + 'Sirve justo para lo que el reconocimiento de música no puede ni intentar —fechas, nombres, '
+      + 'capitales—, porque ahí no hay huella que buscar. Se paga por pregunta, no por cuota. Y conviene '
+      + 'marcarlas con la pierna: el oído está hecho para notar que empieza una canción, y una voz en una '
+      + 'sala no se le parece en casi nada.'
+    : 'La pregunta es una canción y la reconoce AudD por su huella: de unos segundos de música saca el '
+      + 'título y el intérprete. Con las preguntas que no son de música no puede hacer nada —ahí no hay '
+      + 'huella que buscar—, y para esas está el otro modo.';
+}
+
+/**
  * Переключатель режима активации. Два радио, а не галочка: режима ровно два,
  * они исключают друг друга, и у каждого свой набор настроек. Хранится это
  * по-прежнему одним флагом `pose` — от того, что выключатель стал парой кнопок,
@@ -1465,11 +1649,15 @@ async function applyMode() {
 // поэтому последствие считается и показывается прямо под ползунком.
 function refreshClipHint() {
   const at = settings.clip + LEAD_IN;
-  $('setClipHint').textContent =
-    `El envío se hace en el segundo ${at} de la canción; el fragmento va del segundo ${LEAD_IN} al ${at}. ` +
-    `Si la canción dura menos de ${at} s, en la huella entrará la pausa que viene después. ` +
-    `AudD trabaja con más seguridad a partir de 10 s, pero no toda canción los tiene. ` +
-    `Con la pierna no hace falta: la pregunta dura lo que usted la tenga levantada, y eso es lo que se manda.`;
+  const tail = 'Con la pierna no hace falta: la pregunta dura lo que usted la tenga levantada, '
+    + 'y eso es lo que se manda.';
+  $('setClipHint').textContent = asksQuestion()
+    ? `El envío se hace en el segundo ${at} de lo que se oye; el fragmento va del segundo ${LEAD_IN} al ${at}. `
+      + `Una pregunta hablada rara vez cabe ahí, y lo que quede fuera no llega al modelo: contestará a media `
+      + `pregunta sin saber que le falta la otra media. ${tail}`
+    : `El envío se hace en el segundo ${at} de la canción; el fragmento va del segundo ${LEAD_IN} al ${at}. `
+      + `Si la canción dura menos de ${at} s, en la huella entrará la pausa que viene después. `
+      + `AudD trabaja con más seguridad a partir de 10 s, pero no toda canción los tiene. ${tail}`;
 }
 
 // Что сейчас выбрано и что из этого следует. Нога без калибровки не решает
@@ -1518,6 +1706,9 @@ function refreshMorseHint() {
   const off = !dot;
 
   for (const sync of morseSyncs) sync();
+  // Цена многословия у модели считается в буквах, а буквы отмеряет этот же
+  // блок настроек: подсказка под полем должна меняться вместе с ползунком.
+  refreshSystemHint();
   for (const id of ['testMorseBtn', 'setMorseLetters', 'setMorseSimple', 'setMorseDash', 'setMorseGapSym',
                     'setMorseGapLetter', 'setMorseMark', 'setMorseTwice', 'setMorseGapRepeat']) {
     $(id).disabled = off;
@@ -1645,6 +1836,37 @@ function refreshMorseHint() {
     (letters.length ? `Con repetición son ${secs(twice)}; sin ella, ${secs(once)}.` : 'Cuesta exactamente el doble.');
 }
 
+// Пара из самой подсказки по умолчанию: тот же вопрос, отвеченный словом и
+// отвеченный фразой. Взята оттуда нарочно — читатель увидит её в поле выше
+// ровно в этом виде, и разбирать в примере что-то третье значило бы объяснять
+// не то, что там написано.
+const EG_SHORT = 'París';
+const EG_LONG = 'La capital de Francia es París';
+
+// Подсказка модели решает не «как красиво ответить», а поместится ли ответ
+// в мотор: до него доходят первые morseLetters букв, и всё, что модель скажет
+// до сути, эти буквы и займёт. Поэтому под полем стоит не совет о вежливости,
+// а цена многословия, посчитанная на нынешнем числе букв.
+function refreshSystemHint() {
+  const n = settings.morseLetters;
+  // Примеры считаются азбукой, а не переписаны словами: ползунки и галочка над
+  // ними меняют ровно то, о чём тут речь, и списанный однажды «ELPLA» разошёлся
+  // бы с мотором на первой же правке настроек.
+  $('setSystemHint').textContent =
+    `Va como system prompt, delante del audio. Aquí se decide si la respuesta se puede leer al tacto: `
+    + `al motor solo llegan las ${n} primeras ${plural(n, 'letra', 'letras')} de lo que conteste el modelo. `
+    + `«${EG_SHORT}» se marca entero —${morse.word(spell(EG_SHORT))}—; «${EG_LONG}» llega como `
+    + `${morse.word(spell(EG_LONG))} y no dice nada. Pedir una respuesta de una `
+    + `sola palabra, sin frase alrededor, es lo que hace que quepa: eso es justo lo que pide la indicación `
+    + `por defecto, y por eso trae ejemplos en vez de solo pedir brevedad —a secas, el modelo la entiende `
+    + `como «una frase corta» y repite la pregunta antes de contestar. Dejar el campo en blanco devuelve `
+    + `esa indicación por defecto. `
+    + `Los números no llegan de ninguna manera: cada cifra se marca con la inicial de su nombre en inglés, `
+    + `y ahí el 2 y el 3, el 4 y el 5, el 6 y el 7 caen en la misma letra — 1989 llega como `
+    + `${morse.word(spell('1989'))} y 1945, como ${morse.word(spell('1945'))}. Un año, una fecha o un `
+    + `resultado hay que mirarlos en la pantalla.`;
+}
+
 // Цена одной буквы — не константа: она зависит и от кода буквы, и от всех пауз.
 // Берём среднее по тому, что стучится сейчас, — врать оно может только в мелочи.
 function perLetterMs() {
@@ -1664,6 +1886,26 @@ function initSettings() {
     saveSettings();
     updateTokenNotice();
     if (settings.token) showError('');
+  });
+
+  const orToken = $('setOrToken');
+  orToken.value = settings.orToken;
+  orToken.addEventListener('input', () => {
+    settings.orToken = orToken.value.trim();
+    saveSettings();
+    updateTokenNotice();
+    if (settings.orToken) showError('');
+  });
+
+  const system = $('setSystem');
+  system.value = settings.system;
+  system.addEventListener('input', () => {
+    // Пустое поле — не «без подсказки», а «модель не знает, чего от неё хотят»:
+    // в запрос уходит умолчание. Стирать написанное поверх пустоты не за что,
+    // здесь так и остаётся пусто — подставляет клиент, при самой отправке.
+    settings.system = system.value;
+    saveSettings();
+    refreshSystemHint();
   });
 
   bindRange('setThreshold', 'threshold', (v) => `${Math.round(v * 100)}%`, applyGate);
@@ -1690,12 +1932,12 @@ function initSettings() {
   // посмотреть на цифру. Отстукиваем новый вариант сразу — но на change, а не на
   // input: во время перетаскивания каждое движение обрывало бы предыдущий шаблон,
   // и под пальцем была бы не морзянка, а дребезг.
-  bindCheck('setMorseMark', 'morseMark', () => { refreshMorseHint(); buzzArtist(buzzSample()); });
-  bindCheck('setMorseTwice', 'morseTwice', () => { refreshMorseHint(); buzzArtist(buzzSample()); });
-  bindCheck('setMorseSimple', 'morseSimple', () => { refreshMorseHint(); buzzArtist(buzzSample()); });
+  bindCheck('setMorseMark', 'morseMark', () => { refreshMorseHint(); buzzAnswer(buzzSample()); });
+  bindCheck('setMorseTwice', 'morseTwice', () => { refreshMorseHint(); buzzAnswer(buzzSample()); });
+  bindCheck('setMorseSimple', 'morseSimple', () => { refreshMorseHint(); buzzAnswer(buzzSample()); });
   for (const id of ['setMorse', 'setMorseLetters', 'setMorseDash', 'setMorseGapSym',
                     'setMorseGapLetter', 'setMorseGapRepeat']) {
-    $(id).addEventListener('change', () => buzzArtist(buzzSample()));
+    $(id).addEventListener('change', () => buzzAnswer(buzzSample()));
   }
   // Цвет виден сразу, а не со следующего скрытия: галочку щёлкают, чтобы
   // посмотреть, каким экран будет.
@@ -1705,6 +1947,7 @@ function initSettings() {
   });
   bindRange('setBlankHold', 'blankHold', (v) => `${v} s`);
 
+  bindAsk();
   bindMode();
   bindRange('setPoseStep', 'poseStep', (v) => `${v.toFixed(1)}°`, () => {
     poseGate?.configure({ minAngle: settings.poseStep });
@@ -1715,11 +1958,14 @@ function initSettings() {
   refreshMorseHint();
   refreshModeUI();
   refreshPoseHint();
+  refreshAskUI();
+  refreshAskHint();
+  refreshSystemHint();
 
   // Единственный способ узнать, доходит ли вибрация до этого телефона, — не
   // дожидаться трека. Стучит то же, что придёт на распознавание, и на том же
   // имени, что показано в подсказке.
-  $('testMorseBtn').addEventListener('click', () => buzzArtist(buzzSample()));
+  $('testMorseBtn').addEventListener('click', () => buzzAnswer(buzzSample()));
 
   $('trainBuzzBtn').addEventListener('click', trainBuzz);
   $('trainShowBtn').addEventListener('click', trainShow);
@@ -1728,7 +1974,7 @@ function initSettings() {
   $('resetSettingsBtn').addEventListener('click', () => {
     // Ключ и ось — не настройки, а то, что добыто отдельно: первый выдан
     // сервисом, вторая снята с телефона. Умолчания для них не существует.
-    settings = { ...DEFAULTS, token: settings.token, poseAxis: settings.poseAxis };
+    settings = { ...DEFAULTS, token: settings.token, orToken: settings.orToken, poseAxis: settings.poseAxis };
     saveSettings();
     location.reload();
   });
@@ -1751,7 +1997,7 @@ initSettings();
 renderHistory();
 updateTokenNotice();
 // Первый заход: поле ключа спрятано в свёрнутом блоке, разворачиваем сразу.
-if (!settings.token) document.querySelector('.settings').open = true;
+if (!activeToken()) document.querySelector('.settings').open = true;
 if (!navigator.mediaDevices?.getUserMedia) {
   showError('El navegador no admite la captura de sonido. Hace falta un Chrome, Firefox, Edge o Safari moderno a través de HTTPS.');
   el.toggle.disabled = true;
