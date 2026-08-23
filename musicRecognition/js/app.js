@@ -682,12 +682,16 @@ const setPoseCal = (text, tone = '') => {
  * Какого движения ждут сейчас: 1 — поднять ногу, 2 — опустить, 0 — калибровка
  * не идёт. Сам список висит всегда: его читают до того, как телефон уедет в
  * карман. Подсветка — тем, кто калибрует, глядя на экран.
+ *
+ * В списке только движения, и потому пройденным помечается лишь то, что телефон
+ * подтвердил вибрацией. Укладка в карман не движение: ему её не подтвердить, а
+ * гасить строку, которую человек в эту секунду и выполняет, — врать.
  */
 function setPoseCalStep(n) {
   const items = $('poseCalSteps').children;
   for (let i = 0; i < items.length; i++) {
-    items[i].classList.toggle('is-now', n > 0 && i === n);
-    items[i].classList.toggle('is-done', n > 0 && i < n);
+    items[i].classList.toggle('is-now', n > 0 && i === n - 1);
+    items[i].classList.toggle('is-done', n > 0 && i < n - 1);
   }
 }
 
@@ -773,8 +777,9 @@ async function startCalibration() {
   armCalTimeout();
   setPoseCalStep(1);
   $('calibratePoseBtn').textContent = 'Cancelar';
-  setPoseCal('Guarde el teléfono donde vaya a estar, siéntese como en el concurso y levante la '
-    + 'pierna: quieto un segundo antes y otro después. El aviso tarda segundo y medio en llegar.');
+  setPoseCal('Ahora guarde el teléfono donde vaya a estar y siéntese como en el concurso; tómese '
+    + 'el tiempo que necesite. Ya sentado: quieto un segundo, suba la pierna, quieto otro segundo. '
+    + 'El aviso tarda segundo y medio en llegar.');
   log('', 'calibración de la pierna: esperando el primer movimiento');
 }
 
@@ -812,6 +817,15 @@ function onPoseStep(e) {
   // выносит уже после калибровочной ветки.
   if (poseGate?.calibrating) {
     armCalTimeout();
+    // Первое длинное движение после нажатия — это укладка в карман: её только
+    // что и велели сделать. Ругаться на исполненное указание нельзя, а мотор
+    // тут вдобавок стучал бы человеку в руку, пока телефон ещё в ней. Отказом
+    // это станет позже: к тому времени карман уже позади.
+    if (e.verdict === 'long' && !poseGate.calSteps) {
+      setPoseCal('Teléfono guardado. Ahora quédese quieto un segundo y suba la pierna.');
+      log('', `calibración: teléfono guardado (${e.moveSec.toFixed(1)} s)`);
+      return;
+    }
     poseBuzz(POSE_BUZZ.retry);
     setPoseCal(e.verdict === 'long'
       ? `No cuenta: el movimiento ha durado ${e.moveSec.toFixed(1)} s, demasiado para un cambio `
@@ -1779,8 +1793,8 @@ function refreshPoseHint() {
       ? 'Calibrado. Vuelva a hacerlo si cambia de bolsillo o de sitio para el teléfono: lo que se guarda '
         + 'es la dirección del giro, y depende de cómo quede ahí dentro. Con cada cambio de postura '
         + 'la dirección se afina sola, así que una calibración vieja se corrige a los pocos movimientos.'
-      : 'Sin calibrar. Son dos movimientos, y el teléfono confirma cada uno vibrando: léase los '
-        + 'tres pasos antes de guardárselo, porque a partir de ahí la pantalla ya no se ve.');
+      : 'Sin calibrar. Léase los dos pasos antes de guardarse el teléfono, porque a partir de '
+        + 'ahí la pantalla ya no se ve y todo lo dice el motor.');
   }
 }
 

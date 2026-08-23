@@ -121,6 +121,8 @@ export class PoseGate {
   /** Откалиброван ли: без оси гейт умеет только видеть движение, но не толковать его. */
   get ready() { return Boolean(this.axis); }
   get calibrating() { return this.cal !== null; }
+  /** Сколько движений калибровка уже приняла: 0 — ждёт самого первого. */
+  get calSteps() { return this.cal ? this.cal.length : 0; }
 
   /**
    * Снять ось заново: следующие движения — поднятие ноги и возврат обратно.
