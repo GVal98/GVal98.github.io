@@ -1,5 +1,6 @@
 import { AudioCapture } from './audio.js';
 import { MusicDetector, MusicGate } from './detector.js';
+import { PoseGate, PoseSensor } from './pose.js';
 import { recognize, trackKey, artworkUrl, links, AudDError } from './audd.js';
 import * as morse from './morse.js';
 import { ARTISTS } from './artists.js';
@@ -64,6 +65,13 @@ const DEFAULTS = {
   // бережёт метка, и по умолчанию повтор выключен. Остаётся он для тех, кому
   // нужен второй шанс на всё имя, а не только на его начало.
   morseTwice: false,
+  // Включение ногой вместо слуха: одна поза слушает, другая молчит. Само
+  // распознавание от этого не меняется — меняется только то, кто решает, что
+  // вопрос начался. Ось снимается калибровкой и живёт здесь же: без неё гейт
+  // видит движение, но не знает, в какую сторону оно значит «слушай».
+  pose: false,
+  poseAxis: null,
+  poseStep: 1,       // ° поворота, ниже которых движение позой не считается
   // Скрытый экран: страницы не видно, приложение слушает и стучит дальше.
   blankWhite: false,  // чёрный или белый — на сам звук это не влияет никак
   blankHold: 1.5,     // сколько держать палец, чтобы вернуть интерфейс
@@ -131,6 +139,8 @@ let history = loadHistory();
 let capture = null;
 let detector = null;
 let gate = null;
+let poseGate = null;     // включение ногой; null — датчик не поднимали
+let poseSensor = null;
 let session = null;      // текущий непрерывный отрезок музыки
 let current = null;      // запись, показанная в «Сейчас играет»
 let features = null;
@@ -222,6 +232,11 @@ function setStatus(kind, text) {
 function refreshStatus() {
   if (!running) return setStatus('idle', 'Detenido');
   if (inFlight) return setStatus('busy', 'Reconociendo…');
+  // С включением ногой «suena música» ничего не значит: музыка могла играть всю
+  // паузу между вопросами. Значение имеет нога, её и показываем.
+  if (settings.pose) return poseGate?.up
+    ? setStatus('music', 'Pierna arriba')
+    : setStatus('listen', 'Pierna abajo');
   if (gate?.playing) return setStatus('music', 'Suena música');
   setStatus('listen', 'Escuchando');
 }
@@ -244,6 +259,14 @@ function updateTokenNotice() {
 async function start() {
   if (!settings.token) return promptForToken();
   showError('');
+  // Датчик поднимается раньше микрофона: на iOS разрешение на движение дают
+  // только из жеста, а к концу запроса микрофона жест уже протух.
+  if (settings.pose) {
+    if (!settings.poseAxis) return promptForCalibration();
+    if (!await ensurePose()) return;
+    poseGate.configure({ axis: settings.poseAxis, minAngle: settings.poseStep });
+    poseGate.arm();
+  }
   el.toggle.disabled = true;
   el.blankBtn.disabled = true;
   // Пока браузер показывает запрос доступа, промис висит без единого признака
@@ -304,11 +327,15 @@ async function stop() {
   running = false;
   cancelAnimationFrame(rafId);
   rafId = 0;
-  if (session) endSession();
+  if (session) endSession('se ha dejado de escuchar');
   if (capture) { await capture.stop(); capture = null; }
   detector = null;
   gate = null;
   features = null;
+  // Датчик остаётся поднятым только ради калибровки: она идёт при выключенном
+  // микрофоне и своим ходом. Всё остальное время он стоит денег батареи и не
+  // включает ничего.
+  if (!poseGate?.calibrating) stopPose();
 
   document.body.classList.remove('is-running', 'is-music');
   el.toggle.textContent = 'Empezar a escuchar';
@@ -408,15 +435,23 @@ function onFrame({ analyser, samples }) {
     }
   }
 
+  // Слух считает оценку и рисует монитор всегда — по нему видно, слышно ли
+  // музыку вообще. А вот открывать и закрывать сессию он перестаёт, как только
+  // это берёт на себя нога: два выключателя на одну лампу спорили бы друг с
+  // другом ровно в паузах между вопросами, ради которых нога и заведена.
+  // Расписание запросов ниже общее: сессию открыли ногой — фрагмент всё равно
+  // собирается из звука и уходит по тем же часам.
   const event = gate.step(features.score, now);
-  if (event === 'start') startSession();
-  else if (event === 'stop') endSession();
-  // Музыка на секунду-другую прервалась и пошла снова, а гейт этого не заметил.
-  // Для нас это конец одного вопроса и начало следующего: сессия та же, а трек
-  // уже другой, и спрашивать про него надо заново.
-  else if (session && gate.segmentAt !== null && gate.segmentAt !== session.segmentAt) {
-    beginSegment(gate.segmentAt);
-    log('', `la música se ha cortado y ha vuelto, envío dentro de ${untilCheck()} s`);
+  if (!settings.pose) {
+    if (event === 'start') startSession(gate.segmentAt ?? gate.startedAt, 'ha empezado la música');
+    else if (event === 'stop') endSession();
+    // Музыка на секунду-другую прервалась и пошла снова, а гейт этого не заметил.
+    // Для нас это конец одного вопроса и начало следующего: сессия та же, а трек
+    // уже другой, и спрашивать про него надо заново.
+    else if (session && gate.segmentAt !== null && gate.segmentAt !== session.segmentAt) {
+      beginSegment(gate.segmentAt);
+      log('', `la música se ha cortado y ha vuelto, envío dentro de ${untilCheck()} s`);
+    }
   }
 
   if (session && !inFlight && now >= session.nextCheckAt) {
@@ -428,15 +463,21 @@ function untilCheck() {
   return Math.max(0, Math.round(session.nextCheckAt - heard()));
 }
 
-function startSession() {
+/**
+ * Начало вопроса. `at` — момент, с которого он считается начавшимся: слух даёт
+ * сюда время, когда оценка пошла вверх, нога — когда началось её движение.
+ * И то и другое раньше, чем мы об этом узнали, и отступ с длиной фрагмента
+ * отмеряются именно оттуда.
+ */
+function startSession(at, why) {
   // entry живёт на всю сессию, а не на кусок: по нему сверяется, тот же трек
   // ответил или уже другой, и разрыв внутри одного трека не должен плодить
   // в истории вторую запись о нём же.
   session = { entry: null };
-  beginSegment(gate.segmentAt ?? gate.startedAt);
+  beginSegment(at);
   document.body.classList.add('is-music');
   refreshStatus();
-  log('', `ha empezado la música, envío dentro de ${untilCheck()} s`);
+  log('', `${why}, envío dentro de ${untilCheck()} s`);
 }
 
 /**
@@ -465,13 +506,13 @@ function scheduleRecheck(s) {
   s.nextCheckAt = settings.recheck ? heard() + settings.recheck : Infinity;
 }
 
-function endSession() {
+function endSession(why = 'la música ha cesado') {
   if (session?.entry) closeEntry(session.entry);
   session = null;
   document.body.classList.remove('is-music');
   refreshStatus();
   renderNow();
-  log('', 'la música ha cesado');
+  log('', why);
 }
 
 function closeEntry(entry, at = Date.now()) {
@@ -480,6 +521,131 @@ function closeEntry(entry, at = Date.now()) {
     saveHistory();
     renderHistory();
   }
+}
+
+/* ----------------------------------------------------------------------- нога */
+
+// Второй выключатель: слушаем не тогда, когда услышали музыку, а тогда, когда
+// подняли ногу. В зале это разные вещи — между вопросами играет фон, ведущий
+// говорит под музыку, и слух открывает гейт там, где спрашивать нечего.
+//
+// Почему гейт ловит не позу, а переход между позами, откуда взялись пороги и
+// зачем калибровка — всё в js/pose.js. Здесь только проводка: датчик, ответы
+// гейта и то, во что они превращаются. Микрофон при этом работает как работал:
+// нога решает, какой вопрос спрашивать, а фрагмент всё равно берётся из звука.
+
+// Подтверждения калибровки. Телефон в кармане, смотреть на экран нельзя —
+// значит, сказать «принято» можно только мотором.
+const POSE_BUZZ = { step: [120], done: [400, 150, 400] };
+
+const setPoseCal = (text) => { $('setPoseCalHint').textContent = text; };
+
+/** Без оси гейт видит движение, но не знает, что оно значит. Ведём к кнопке. */
+function promptForCalibration() {
+  showError('Primero calibre la pierna en los ajustes: sin saber hacia dónde gira el teléfono, '
+    + 'levantarla y bajarla son para él el mismo movimiento.');
+  document.querySelector('.settings').open = true;
+  $('calibratePoseBtn').scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+
+/** Поднять датчик, если он ещё не поднят. Спрашивать разрешение можно из жеста. */
+async function ensurePose() {
+  if (poseSensor) return true;
+  let granted = false;
+  try { granted = await PoseSensor.ask(); }
+  catch (e) { showError(e.message || 'No se ha podido pedir el acceso a los sensores de movimiento.'); return false; }
+  if (!granted) {
+    showError('No se ha permitido el acceso a los sensores de movimiento.');
+    return false;
+  }
+  poseGate = new PoseGate({ axis: settings.poseAxis, minAngle: settings.poseStep });
+  poseSensor = new PoseSensor((...frame) => {
+    const e = poseGate.push(...frame);
+    if (e) onPoseStep(e);
+  });
+  poseSensor.start();
+  // Датчика может не быть вовсе, а может не быть только гироскопа — и второе
+  // хуже первого, потому что выглядит как рабочий выключатель, который молчит.
+  setTimeout(() => {
+    if (!poseSensor) return;
+    if (!poseSensor.frames) showError('El sensor de movimiento no envía nada: hace falta un teléfono y una conexión https.');
+    else if (!poseSensor.hasRotation) showError('Este navegador no da la velocidad de giro: aquí la pierna no puede servir de interruptor.');
+  }, 2000);
+  return true;
+}
+
+function stopPose() {
+  poseSensor?.stop();
+  poseSensor = null;
+  poseGate = null;
+  refreshPoseHint();
+}
+
+async function startCalibration() {
+  showError('');
+  if (!await ensurePose()) return;
+  poseGate.calibrate();
+  setPoseCal('Guarde el teléfono donde vaya a estar, siéntese como en el concurso y levante la pierna. '
+    + 'El teléfono lo confirmará con una vibración corta.');
+  log('', 'calibración de la pierna: esperando el primer movimiento');
+}
+
+/** Ответ гейта: смена позы, шаг калибровки или причина, по которой не считается. */
+function onPoseStep(e) {
+  const deg = (v) => `${Math.abs(v).toFixed(1)}°`;
+
+  if (e.verdict === 'calibrating') {
+    poseBuzz(POSE_BUZZ.step);
+    setPoseCal(`Movimiento tomado (${deg(e.along)}). Ahora baje la pierna y quédese quieto un momento.`);
+    log('', `calibración: pierna levantada, ${deg(e.along)}`);
+    return;
+  }
+  if (e.verdict === 'calibrated') {
+    settings.poseAxis = poseGate.axis;
+    saveSettings();
+    poseBuzz(POSE_BUZZ.done);
+    refreshPoseHint();
+    log('ok', `pierna calibrada: al cambiar de postura el teléfono gira ${deg(e.along)}`);
+    // Калибруют и при выключенном приложении. Дальше датчику делать нечего:
+    // пока никто не слушает, включать ногой нечего.
+    if (!running) stopPose();
+    return;
+  }
+  if (!settings.pose) return;
+
+  if (e.verdict === 'up' || e.verdict === 'down') {
+    // Ось уточнилась на этой же ступеньке — пусть переживёт вкладку.
+    settings.poseAxis = poseGate.axis;
+    saveSettings();
+  }
+  if (e.verdict === 'up') {
+    // Вопрос начался тогда, когда нога пошла, а не когда гейт в этом убедился:
+    // полторы секунды разницы — это полторы секунды музыки во фрагменте.
+    if (!session) startSession(Math.max(0, heard() - e.age), `pierna levantada (${deg(e.along)})`);
+    return;
+  }
+  if (e.verdict === 'down') {
+    if (session) endSession(`pierna bajada (${deg(e.along)})`);
+    else log('', 'pierna bajada');
+    return;
+  }
+  // Остальное — в журнал, кроме `small`: это дрожь, и строк от неё было бы
+  // больше, чем от всего прочего вместе.
+  if (e.verdict === 'across') log('', `giro de ${deg(e.angle)} en otra dirección: la postura no ha cambiado`);
+  else if (e.verdict === 'same') log('', `la pierna ya estaba ${poseGate.up ? 'arriba' : 'abajo'}`);
+  else if (e.verdict === 'long') log('', `movimiento de ${e.moveSec.toFixed(1)} s: demasiado largo para ser un cambio de postura`);
+}
+
+/**
+ * Вибрация подтверждения. Мотор трясёт корпус, и для гейта ноги это движение,
+ * ничем не хуже настоящего: на время сигнала он слепнет, как микрофон глохнет
+ * на морзянку.
+ */
+function poseBuzz(pattern) {
+  if (!navigator.vibrate?.(pattern)) return;
+  const ms = pattern.reduce((sum, v) => sum + v, 0);
+  poseGate?.blind(ms / 1000 + BUZZ_TAIL_SEC);
+  deafen(ms);
 }
 
 /* ------------------------------------------------------------- распознавание */
@@ -669,6 +835,10 @@ function buzzArtist(artist, { secret = false } = {}) {
   // Глохнем ровно на то, что мотор действительно стучит: шаблон, который
   // браузер не пропустил, корпус не трясёт, и глохнуть на него не за что.
   const wentDeaf = sent && deafen(ms);
+  // Гейт ноги слепнет на то же самое и по той же причине: десять секунд тряски
+  // он прочитал бы как десяток движений, и вопрос закрылся бы сам собой посреди
+  // собственного ответа.
+  if (sent) poseGate?.blind(ms / 1000 + BUZZ_TAIL_SEC);
   const what = secret
     ? `a ciegas, ${letters.length} ${plural(letters.length, 'letra', 'letras')}`
     : readout(letters);
@@ -683,6 +853,7 @@ function buzzArtist(artist, { secret = false } = {}) {
 function stopBuzz() {
   navigator.vibrate?.(0);
   hearAgain();
+  poseGate?.see();
 }
 
 // Из настроек морзянка берёт не только длительности, но и саму азбуку: сколько
@@ -871,8 +1042,10 @@ function render() {
     : features.warmingUp
       ? 'midiendo el ruido de la sala'
       : session
-        ? (session.solved ? 'canción identificada' : 'suena música, reuniendo el fragmento')
-        : 'esperando música';
+        ? (session.solved ? 'canción identificada'
+          : settings.pose ? 'pregunta en curso, reuniendo el fragmento'
+          : 'suena música, reuniendo el fragmento')
+        : settings.pose ? 'esperando la pierna' : 'esperando música';
 
   updateNowTimer();
 
@@ -1024,6 +1197,7 @@ function setThemeColor(color) {
 function blankStatus() {
   const state = !running ? 'detenido'
     : inFlight ? 'reconociendo'
+    : settings.pose ? (poseGate?.up ? 'pierna arriba' : 'pierna abajo')
     : gate?.playing ? 'suena música'
     : 'escuchando';
   const last = current ? `${current.artist} — ${current.title}` : 'todavía no se ha reconocido nada';
@@ -1113,6 +1287,34 @@ function refreshClipHint() {
     `El envío se hace en el segundo ${at} de la canción; el fragmento va del segundo ${LEAD_IN} al ${at}. ` +
     `Si la canción dura menos de ${at} s, en la huella entrará la pausa que viene después. ` +
     `AudD trabaja con más seguridad a partir de 10 s, pero no toda canción los tiene.`;
+}
+
+// Что сейчас включено и что от этого следует. Галочка без калибровки не делает
+// ничего, и молчать об этом нельзя: со стороны это выглядит сломанным
+// выключателем, а не невыполненным условием.
+function refreshPoseHint() {
+  const ready = Boolean(settings.poseAxis);
+  $('setPoseHint').textContent = !settings.pose
+    ? 'Ahora decide el oído: la aplicación nota por sí misma que ha empezado a sonar una canción. '
+      + 'Con la pierna decide usted, y en una sala eso no es lo mismo: entre pregunta y pregunta suena '
+      + 'música de fondo, y el oído abre el reconocimiento donde no hay nada que preguntar.'
+    : ready
+      ? 'Levante la pierna cuando empiece la pregunta y bájela cuando termine. El oído sigue midiendo '
+        + 'y se ve en el monitor, pero ya no abre ni cierra nada: mandar dos interruptores a la vez '
+        + 'sobre una misma lámpara sale peor que uno.'
+      : 'Falta calibrar: sin saber hacia dónde gira el teléfono al levantar la pierna, para él levantarla '
+        + 'y bajarla son el mismo movimiento. Hasta entonces sigue decidiendo el oído.';
+
+  // Пока калибровка идёт, эту строку ведёт она сама: там по шагам сказано,
+  // что делать ногой, и затирать это общим описанием нельзя.
+  if (!poseGate?.calibrating) {
+    setPoseCal(ready
+      ? 'Calibrado. Vuelva a hacerlo si cambia de bolsillo o de sitio para el teléfono: lo que se guarda '
+        + 'es la dirección del giro, y depende de cómo quede ahí dentro. Con cada cambio de postura '
+        + 'la dirección se afina sola, así que una calibración vieja se corrige a los pocos movimientos.'
+      : 'Sin calibrar. Son dos movimientos: levantar la pierna y volver a bajarla, con una pausa entre '
+        + 'ellos. Guardar el teléfono en el bolsillo no cuenta como ninguno de los dos, dura demasiado.');
+  }
 }
 
 // Ползунков у морзянки шесть, и почти все считаются друг от друга: паузы кратны
@@ -1314,8 +1516,24 @@ function initSettings() {
   });
   bindRange('setBlankHold', 'blankHold', (v) => `${v} s`);
 
+  // Галочку можно щёлкнуть и посреди работы: датчик поднимается на месте, а
+  // выключенная — опускает его обратно, чтобы он не жёг батарею впустую.
+  bindCheck('setPose', 'pose', async () => {
+    refreshPoseHint();
+    if (!running) return;
+    if (!settings.pose) return stopPose();
+    if (!settings.poseAxis) return promptForCalibration();
+    if (await ensurePose()) poseGate.arm();
+    refreshStatus();
+  });
+  bindRange('setPoseStep', 'poseStep', (v) => `${v.toFixed(1)}°`, () => {
+    poseGate?.configure({ minAngle: settings.poseStep });
+  });
+  $('calibratePoseBtn').addEventListener('click', startCalibration);
+
   refreshClipHint();
   refreshMorseHint();
+  refreshPoseHint();
 
   // Единственный способ узнать, доходит ли вибрация до этого телефона, — не
   // дожидаться трека. Стучит то же, что придёт на распознавание, и на том же
@@ -1327,7 +1545,9 @@ function initSettings() {
   $('trainNextBtn').addEventListener('click', trainNext);
 
   $('resetSettingsBtn').addEventListener('click', () => {
-    settings = { ...DEFAULTS, token: settings.token }; // ключ сбрасывать не за что
+    // Ключ и ось — не настройки, а то, что добыто отдельно: первый выдан
+    // сервисом, вторая снята с телефона. Умолчания для них не существует.
+    settings = { ...DEFAULTS, token: settings.token, poseAxis: settings.poseAxis };
     saveSettings();
     location.reload();
   });

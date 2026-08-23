@@ -49,6 +49,14 @@
       volumen que la cercanía.
     </p>
     <p class="hint">
+      También puede decidirlo usted con la pierna, sin sacar el teléfono del
+      bolsillo: una postura escucha, la otra calla. El teléfono no reconoce la
+      postura en sí —en el bolsillo la diferencia es un giro de dos grados, y de
+      un día para otro se pierde entre lo que cambia el propio bolsillo—, sino el
+      momento en que pasa de una a otra. Por eso hay que calibrar antes: una vez
+      levantada y bajada la pierna, para que sepa hacia dónde gira.
+    </p>
+    <p class="hint">
       «Ocultar pantalla» retira la página entera: la aplicación sigue escuchando y
       marcando en morse, pero la pantalla queda vacía, sin título de la canción ni
       ajustes. La pantalla se mantiene encendida; si se apagara, también callaría la
@@ -155,6 +163,34 @@
           preguntas suena música de fondo y la aplicación no ve que la pregunta ha
           cambiado. Cada reconsulta es una solicitud más a AudD, aunque siga sonando
           la misma canción. 0 — no volver a preguntar.</small>
+      </label>
+    </div>
+
+    <h3 class="settings-head">Activación con la pierna</h3>
+    <div class="settings-grid">
+      <div class="field">
+        <label class="field-label field-check">
+          <input type="checkbox" id="setPose">
+          <span>La pierna decide cuándo escuchar</span>
+        </label>
+        <small id="setPoseHint"></small>
+      </div>
+
+      <div class="field">
+        <span class="field-label">Dirección del movimiento</span>
+        <div class="settings-actions">
+          <button class="btn btn--ghost btn--sm" id="calibratePoseBtn">Calibrar</button>
+        </div>
+        <small id="setPoseCalHint"></small>
+      </div>
+
+      <label class="field">
+        <span class="field-label">Cambio mínimo de postura — <b id="setPoseStepVal"></b></span>
+        <input type="range" id="setPoseStep" min="0.5" max="2.5" step="0.1">
+        <small>Al cambiar de postura el teléfono gira en el bolsillo entre 1,1° y 3,9°;
+          quieto en la silla no pasó de 0,4° en ninguna medición. El umbral va en ese
+          hueco. Bájelo si a veces no nota que ha levantado la pierna; súbalo si se
+          activa cuando solo se ha movido en el asiento.</small>
       </label>
     </div>
 
@@ -273,8 +309,8 @@
     <ul class="log-list" id="logList"></ul>
   </details>
 
-  <!-- Временная ссылка: сбор данных акселерометра под включение ногой.
-       Уедет вместе с motion.html, как только пороги будут известны. -->
+  <!-- Ссылка на инструмент, а не на часть приложения: этой страницей снимают
+       акселерометр, когда включение ногой надо перемерить. -->
   <p class="hint temp-link"><a href="./motion.html">Registro del sensor de movimiento</a></p>
 </main>
 

@@ -422,11 +422,10 @@ body.is-blank { overflow: hidden; }
 .blank-bar i { display: block; height: 100%; width: 0; background: #6a6a6a; }
 .blank.is-white .blank-bar i { background: #9a9a9a; }
 
-/* --- Запись движения: временный блок --- */
-/* Страница motion.html снимает данные акселерометра под будущее включение
-   ногой. И она, и эти правила уедут из проекта, как только пороги будут
-   известны, — поэтому всё держится на уже готовых .card, .btn и .field,
-   а своего здесь ровно то, чего в приложении нет. */
+/* --- Запись движения --- */
+/* Правила страницы motion.html: она снимает акселерометр, когда включение ногой
+   надо перемерить. Инструмент, а не часть приложения, и живёт он на всём готовом
+   — .card, .btn, .field, — а своего здесь ровно то, чего в приложении нет. */
 
 .temp-link { text-align: center; }
 .temp-link a { color: var(--muted); text-decoration: underline dotted; text-underline-offset: 3px; }
