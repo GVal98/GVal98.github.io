@@ -150,6 +150,7 @@ let running = false;
 let wasWarmingUp = true;  // чтобы сообщить о замере фона ровно один раз
 // Пока мотор стучит морзянку, микрофон слушает мотор, а не комнату (см. «глухота»).
 let deafUntil = 0;       // до какого момента аудиочасов не слушаем
+let deafFrom = 0;        // и с какого: кусок, записанный до вибрации, ею не испорчен
 let deafSec = 0;         // сколько всего не слушали — на это отстают часы приложения
 let wakeLock = null;
 let rafId = 0;
@@ -316,6 +317,7 @@ async function start() {
   // Аудиочасы у нового захвата начинаются с нуля — вместе с ними обнуляется
   // и всё, что от них отсчитывается.
   deafUntil = 0;
+  deafFrom = 0;
   deafSec = 0;
 
   document.body.classList.add('is-running');
@@ -401,6 +403,12 @@ function heard() {
  */
 function deafen(ms) {
   if (!capture) return false;
+  // Начало глухоты держим отдельно от конца, потому что «до deafUntil всё
+  // грязное» — неправда. Подтверждение опущенной ноги стучит уже после конца
+  // вопроса: сам вопрос записан до него и вибрации не слышал. Продлеваем
+  // начало только если оно уже идёт — вторая вибрация внутри первой это та же
+  // самая полоса грязи.
+  if (!deaf()) deafFrom = capture.audioTime;
   // Не max: navigator.vibrate обрывает прежний шаблон и начинает новый,
   // так что глухота отсчитывается от этого мгновения, а не от старого конца.
   deafUntil = capture.audioTime + ms / 1000 + BUZZ_TAIL_SEC;
@@ -584,9 +592,16 @@ function closeEntry(entry, at = Date.now()) {
 // гейта и то, во что они превращаются. Микрофон при этом работает как работал:
 // нога решает, какой вопрос спрашивать, а фрагмент всё равно берётся из звука.
 
-// Подтверждения калибровки. Телефон в кармане, смотреть на экран нельзя —
-// значит, сказать «принято» можно только мотором.
-const POSE_BUZZ = { step: [120], done: [400, 150, 400] };
+// Подтверждения ноги. Телефон в кармане, смотреть на экран нельзя — значит,
+// сказать «принято» можно только мотором. Молчание при этом тоже ответ:
+// движение, не прошедшее пороги, не подтверждается ничем, и по отсутствию
+// вибрации видно, что нога не засчиталась и её надо повторить.
+const POSE_BUZZ = {
+  step: [120],            // калибровка: движение принято, давай следующее
+  done: [400, 150, 400],  // калибровка: ось снята
+  up: [120],              // квиз: пишем вопрос
+  down: [120, 120, 120],  // квиз: вопрос ушёл в AudD — два коротких против одного
+};
 
 const setPoseCal = (text) => { $('setPoseCalHint').textContent = text; };
 
@@ -680,14 +695,30 @@ function onPoseStep(e) {
     if (session?.closedAt) endSession('');
     // Вопрос начался тогда, когда нога пошла, а не когда гейт в этом убедился:
     // полторы секунды разницы — это полторы секунды музыки во фрагменте.
-    if (!session) startSession(Math.max(0, heard() - e.age), `pierna levantada (${deg(e.along)})`);
+    if (!session) {
+      startSession(Math.max(0, heard() - e.age), `pierna levantada (${deg(e.along)})`);
+      // Подтверждение приходит не в начале вопроса, а тогда, когда гейт разобрал
+      // движение, — через 1.3-1.6 с, — и глушит микрофон ещё на 0.62 с. Кусок
+      // после этого может начаться только с двух секунд вопроса вместо одной:
+      // лишняя секунда с головы, и это самая дешёвая секунда, какая есть. Начало
+      // и так худший материал для отпечатка — на то и отступ, — а вопрос теперь
+      // уходит целиком, и двадцать секунд превращаются в девятнадцать.
+      poseBuzz(POSE_BUZZ.up);
+    }
     return;
   }
   if (e.verdict === 'down') {
     // Опускание — это и есть отправка: запись кончилась, кусок целиком лежит
     // в буфере, и уходит он весь, а не отмеренные восемь секунд.
-    if (session && !session.closedAt) closeSegment(Math.max(0, heard() - e.age), `pierna bajada (${deg(e.along)})`);
-    else log('', 'pierna bajada');
+    if (session && !session.closedAt) {
+      closeSegment(Math.max(0, heard() - e.age), `pierna bajada (${deg(e.along)})`);
+      // Отправляем не дожидаясь кадра: подтверждение сейчас оглушит микрофон
+      // почти на секунду, а глухой кадр до планировщика не доходит — ответ
+      // опоздал бы ровно на длину собственного подтверждения. Куску это уже
+      // безразлично, он весь в буфере и записан до вибрации.
+      runRecognition();
+      poseBuzz(POSE_BUZZ.down);
+    } else log('', 'pierna bajada');
     return;
   }
   // Остальное — в журнал, кроме `small`: это дрожь, и строк от неё было бы
@@ -753,7 +784,12 @@ async function runRecognition() {
   // Дно — начало самого буфера, а не начало куска: в кольце лежат последние
   // BUFFER_SECONDS от «сейчас», и хвост, который мы потом отрежем, место в нём
   // занимает наравне с куском.
-  from = Math.max(from, deafUntil, capture.audioTime - BUFFER_SECONDS);
+  // Отрезаем по вибрации только ту, что попала внутрь куска: морзянка прошлого
+  // ответа могла стучать поверх его начала. Подтверждение опускания ноги
+  // начинается позже конца вопроса, и резать по нему нечего — иначе от каждого
+  // вопроса не оставалось бы ничего.
+  const dirtyUntil = deafFrom < to ? deafUntil : 0;
+  from = Math.max(from, dirtyUntil, capture.audioTime - BUFFER_SECONDS);
 
   const seconds = to - from;
   // Хвост, который в кусок не входит: у слуха его нет, у ноги это те полторы
@@ -1448,9 +1484,11 @@ function refreshPoseHint() {
     : ready
       ? 'Levante la pierna cuando empiece la pregunta: se graba mientras la tenga arriba. Al bajarla, '
         + 'lo grabado se manda a reconocer entero, dure lo que dure — así cada ronda del concurso puede '
-        + 'llevar su propio tiempo sin tocar nada. El oído sigue midiendo y se ve en el monitor, pero ya '
-        + 'no abre ni cierra nada, y por eso sus ajustes tampoco se muestran aquí: con la pierna puesta '
-        + 'ninguno de ellos cambia nada.'
+        + 'llevar su propio tiempo sin tocar nada. El teléfono lo confirma sin sacarlo del bolsillo: una '
+        + 'vibración corta al empezar a grabar, dos al enviar. Si no vibra, el movimiento no ha contado '
+        + 'y hay que repetirlo. El oído sigue midiendo y se ve en el monitor, pero ya no abre ni cierra '
+        + 'nada, y por eso sus ajustes tampoco se muestran aquí: con la pierna puesta ninguno de ellos '
+        + 'cambia nada.'
       : 'Falta calibrar: sin saber hacia dónde gira el teléfono al levantar la pierna, para él levantarla '
         + 'y bajarla son el mismo movimiento. Hasta entonces sigue decidiendo el oído, con los valores '
         + 'que tuviera guardados.';
