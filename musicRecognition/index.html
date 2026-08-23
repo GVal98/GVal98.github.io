@@ -49,8 +49,10 @@
       volumen que la cercanía.
     </p>
     <p class="hint">
-      También puede decidirlo usted con la pierna, sin sacar el teléfono del
-      bolsillo: una postura escucha, la otra calla. El teléfono no reconoce la
+      También puede marcarlo usted con la pierna, sin sacar el teléfono del
+      bolsillo: levantarla abre la pregunta, bajarla la manda a reconocer. El
+      fragmento dura entonces lo que ha durado la pregunta, y da igual que cada
+      ronda del concurso lleve su propio tiempo. El teléfono no reconoce la
       postura en sí —en el bolsillo la diferencia es un giro de dos grados, y de
       un día para otro se pierde entre lo que cambia el propio bolsillo—, sino el
       momento en que pasa de una a otra. Por eso hay que calibrar antes: una vez
@@ -134,17 +136,39 @@
         <small>Se guarda solo en el localStorage de este navegador: hay que
           introducirla en cada dispositivo por separado.</small>
       </label>
+    </div>
+
+    <!-- Un solo interruptor para las dos maneras de marcar dónde empieza y
+         acaba la pregunta. Antes eran una casilla, y los ajustes del oído
+         seguían a la vista con la pierna puesta aunque ya no mandaran nada:
+         el oído entonces sigue midiendo, pero no abre, no cierra y no envía. -->
+    <h3 class="settings-head">Quién marca las preguntas</h3>
+    <div class="modes" role="radiogroup" aria-label="Quién marca las preguntas">
+      <label class="mode">
+        <input type="radio" name="activation" id="setModeEar">
+        <span>El oído</span>
+      </label>
+      <label class="mode">
+        <input type="radio" name="activation" id="setModePose">
+        <span>La pierna</span>
+      </label>
+    </div>
+    <p class="hint" id="setPoseHint"></p>
+
+    <div class="settings-grid" id="earSettings">
+      <!-- Длина фрагмента живёт у слуха, потому что у слуха она и решается:
+           часами. Ногой её назначает сама нога — вопрос длится столько,
+           сколько она поднята, и отмерять тут нечего. -->
+      <label class="field">
+        <span class="field-label">Duración del fragmento — <b id="setClipVal"></b></span>
+        <input type="range" id="setClip" min="5" max="15" step="1">
+        <small id="setClipHint"></small>
+      </label>
 
       <label class="field">
         <span class="field-label">Umbral de «esto es música» — <b id="setThresholdVal"></b></span>
         <input type="range" id="setThreshold" min="0.2" max="0.9" step="0.01">
         <small>Más bajo: se activa más a menudo y se equivoca con el ruido. Más alto: se le escapa la música baja.</small>
-      </label>
-
-      <label class="field">
-        <span class="field-label">Duración del fragmento — <b id="setClipVal"></b></span>
-        <input type="range" id="setClip" min="5" max="15" step="1">
-        <small id="setClipHint"></small>
       </label>
 
       <label class="field">
@@ -166,16 +190,7 @@
       </label>
     </div>
 
-    <h3 class="settings-head">Activación con la pierna</h3>
-    <div class="settings-grid">
-      <div class="field">
-        <label class="field-label field-check">
-          <input type="checkbox" id="setPose">
-          <span>La pierna decide cuándo escuchar</span>
-        </label>
-        <small id="setPoseHint"></small>
-      </div>
-
+    <div class="settings-grid" id="poseSettings">
       <div class="field">
         <span class="field-label">Dirección del movimiento</span>
         <div class="settings-actions">

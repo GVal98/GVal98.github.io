@@ -223,6 +223,15 @@ function showError(text) {
   el.error.hidden = !text;
 }
 
+/* ------------------------------------------------------- режим активации */
+
+// Нога работает выключателем только тогда, когда известно, в какую сторону она
+// поворачивает телефон: без оси гейт на любое движение отвечает «не знаю».
+// Отсюда и проверка. Переключатель при этом стоит на ноге — настройки слуха
+// спрятаны, — а решает всё равно слух, и это честнее, чем работающий микрофон,
+// которым некому открыть вопрос.
+const poseActive = () => settings.pose && Boolean(settings.poseAxis);
+
 /* --------------------------------------------------------------- статус в UI */
 
 function setStatus(kind, text) {
@@ -234,7 +243,7 @@ function refreshStatus() {
   if (inFlight) return setStatus('busy', 'Reconociendo…');
   // С включением ногой «suena música» ничего не значит: музыка могла играть всю
   // паузу между вопросами. Значение имеет нога, её и показываем.
-  if (settings.pose) return poseGate?.up
+  if (poseActive()) return poseGate?.up
     ? setStatus('music', 'Pierna arriba')
     : setStatus('listen', 'Pierna abajo');
   if (gate?.playing) return setStatus('music', 'Suena música');
@@ -442,7 +451,7 @@ function onFrame({ analyser, samples }) {
   // Расписание запросов ниже общее: сессию открыли ногой — фрагмент всё равно
   // собирается из звука и уходит по тем же часам.
   const event = gate.step(features.score, now);
-  if (!settings.pose) {
+  if (!poseActive()) {
     if (event === 'start') startSession(gate.segmentAt ?? gate.startedAt, 'ha empezado la música');
     else if (event === 'stop') endSession();
     // Музыка на секунду-другую прервалась и пошла снова, а гейт этого не заметил.
@@ -456,6 +465,11 @@ function onFrame({ analyser, samples }) {
 
   if (session && !inFlight && now >= session.nextCheckAt) {
     runRecognition();
+  } else if (session?.closedAt && !inFlight && !Number.isFinite(session.nextCheckAt)) {
+    // Нога опущена, ответ получен или спрашивать больше нечем. Сессия дожила
+    // ровно до этого: дальше ей нечего принимать, и закрывать её надо здесь,
+    // а не в ответе, — до сюда доходят и промах, и отказ AudD, и пустой клип.
+    endSession('');
   }
 }
 
@@ -477,7 +491,7 @@ function startSession(at, why) {
   beginSegment(at);
   document.body.classList.add('is-music');
   refreshStatus();
-  log('', `${why}, envío dentro de ${untilCheck()} s`);
+  log('', poseActive() ? `${why}, grabando` : `${why}, envío dentro de ${untilCheck()} s`);
 }
 
 /**
@@ -487,32 +501,68 @@ function startSession(at, why) {
  * отправки, и длина фрагмента, и время начала записи в истории.
  */
 function beginSegment(at) {
+  const late = Math.max(0, heard() - at);
   session.segmentAt = at;
   // Часы стены по аудиочасам, а не Date.now(): кусок начался раньше, чем мы
   // это подтвердили, и в истории должно стоять его настоящее начало.
-  session.segmentAtWall = Date.now() - Math.max(0, heard() - at) * 1000;
+  session.segmentAtWall = Date.now() - late * 1000;
+  // Третьи часы того же мгновения — аудиочасы. Ими размечен кольцевой буфер,
+  // и вырезать из него кусок надо ими: часы приложения отстают от них на всю
+  // глухоту, а в буфер морзянка легла наравне со всем остальным.
+  session.segmentAtAudio = capture.audioTime - late;
+  session.closedAt = null;   // нога ещё не опущена; у слуха так и останется
+  session.closeWhy = '';
+  session.closeWall = 0;
   session.solved = false;
   session.misses = 0;
   session.errors = 0;
-  // Отправка приходит ровно в тот момент, когда фрагмент целиком набрался
-  // музыкой после отступа. Ждать дольше нечего: добавочные секунды в отпечаток
-  // уже не попадут, а риск захватить паузу растёт с каждой.
-  session.nextCheckAt = at + settings.clip + LEAD_IN;
+  // Слух отправляет по часам: ровно в тот момент, когда фрагмент целиком
+  // набрался музыкой после отступа. Ждать дольше нечего — добавочные секунды
+  // в отпечаток уже не попадут, а риск захватить паузу растёт с каждой.
+  // Ноге часы не нужны: пока она поднята, вопрос идёт, а отправку назначит
+  // её же движение вниз.
+  session.nextCheckAt = poseActive() ? Infinity : at + settings.clip + LEAD_IN;
+}
+
+/**
+ * Нога опущена: вопрос кончился. Запись на этом заканчивается, а сессия живёт
+ * до ответа — ей ещё принимать его, а при сорвавшемся запросе и повторять,
+ * причём тем же самым куском: он никуда из буфера не делся.
+ *
+ * `at` — момент, когда нога пошла вниз, а не когда гейт в этом убедился. Те
+ * полторы секунды разницы вопросу уже не принадлежат.
+ */
+function closeSegment(at, why) {
+  const s = session;
+  const late = Math.max(0, heard() - at);
+  s.closedAt = capture.audioTime - late;
+  s.closeWall = Date.now() - late * 1000;
+  s.closeWhy = why;
+  s.nextCheckAt = heard();   // следующий же кадр и отправит
+  document.body.classList.remove('is-music');
+  refreshStatus();
+  log('', `${why}, pregunta de ${(s.closedAt - s.segmentAtAudio).toFixed(1)} s`);
 }
 
 // Промахнулись или узнали — дальше ждём либо разрыва в музыке, либо часов.
 // Бесконечность остаётся только там, где повторять нечего в принципе.
 function scheduleRecheck(s) {
-  s.nextCheckAt = settings.recheck ? heard() + settings.recheck : Infinity;
+  // Закрытый ногой вопрос — как раз такое место. Переспрос нужен слуху: он не
+  // видит, где кончился один вопрос и начался следующий, и часы — его
+  // единственный способ это заметить. У ноги граница проведена рукой, а
+  // второй запрос ушёл бы тем же куском за тем же ответом.
+  s.nextCheckAt = s.closedAt || !settings.recheck ? Infinity : heard() + settings.recheck;
 }
 
 function endSession(why = 'la música ha cesado') {
-  if (session?.entry) closeEntry(session.entry);
+  // Вопрос, закрытый ногой, кончился тогда, когда она опустилась, а не когда
+  // пришёл ответ: иначе в историю попала бы и пауза, пока летел запрос.
+  if (session?.entry) closeEntry(session.entry, session.closeWall || Date.now());
   session = null;
   document.body.classList.remove('is-music');
   refreshStatus();
   renderNow();
-  log('', why);
+  if (why) log('', why);
 }
 
 function closeEntry(entry, at = Date.now()) {
@@ -605,13 +655,18 @@ function onPoseStep(e) {
     saveSettings();
     poseBuzz(POSE_BUZZ.done);
     refreshPoseHint();
+    // До калибровки решал слух, даже если переключатель стоял на ноге. Теперь
+    // решает нога — и в шапке должно быть написано именно это.
+    refreshStatus();
     log('ok', `pierna calibrada: al cambiar de postura el teléfono gira ${deg(e.along)}`);
     // Калибруют и при выключенном приложении. Дальше датчику делать нечего:
     // пока никто не слушает, включать ногой нечего.
     if (!running) stopPose();
     return;
   }
-  if (!settings.pose) return;
+  // Датчик переживает выключенный микрофон: калибруют и при остановленном
+  // приложении. Открывать вопрос тогда не на чем — нет ни аудиочасов, ни буфера.
+  if (!settings.pose || !capture) return;
 
   if (e.verdict === 'up' || e.verdict === 'down') {
     // Ось уточнилась на этой же ступеньке — пусть переживёт вкладку.
@@ -619,13 +674,19 @@ function onPoseStep(e) {
     saveSettings();
   }
   if (e.verdict === 'up') {
+    // Прошлый вопрос ещё ждёт ответа — новый его вытесняет. Ответ на старый
+    // всё равно дойдёт и попадёт в историю: он ушёл со своим куском, и текущей
+    // сессии не касается.
+    if (session?.closedAt) endSession('');
     // Вопрос начался тогда, когда нога пошла, а не когда гейт в этом убедился:
     // полторы секунды разницы — это полторы секунды музыки во фрагменте.
     if (!session) startSession(Math.max(0, heard() - e.age), `pierna levantada (${deg(e.along)})`);
     return;
   }
   if (e.verdict === 'down') {
-    if (session) endSession(`pierna bajada (${deg(e.along)})`);
+    // Опускание — это и есть отправка: запись кончилась, кусок целиком лежит
+    // в буфере, и уходит он весь, а не отмеренные восемь секунд.
+    if (session && !session.closedAt) closeSegment(Math.max(0, heard() - e.age), `pierna bajada (${deg(e.along)})`);
     else log('', 'pierna bajada');
     return;
   }
@@ -661,24 +722,53 @@ async function runRecognition() {
   const req = { s, seg: s.segmentAt, segWall: s.segmentAtWall };
   req.live = () => s === session && s.segmentAt === req.seg;
 
-  // Считаем от начала куска, а не сессии: в склеенной сессии до него лежат
-  // пауза и конец предыдущего вопроса, и в отпечатке им делать нечего.
-  // На первых секундах куска берём только то, что успело прозвучать.
-  const seconds = Math.min(settings.clip, heard() - req.seg);
+  // Окно фрагмента — по аудиочасам: ими размечен кольцевой буфер.
+  //
+  // Конец. Слух отправляет «сейчас»: момент он и назначил. Нога — тем
+  // мгновением, когда пошла вниз; пауза после вопроса в отпечаток не идёт.
+  const to = s.closedAt ?? capture.audioTime;
+  // Начало. Отступ от начала куска — всегда: первые такты худший материал для
+  // отпечатка. От начала куска, а не сессии: в склеенной сессии до него лежат
+  // пауза и конец предыдущего вопроса.
+  let from = s.segmentAtAudio + LEAD_IN;
 
-  // Глухота спасает детектор, но не буфер: морзянку ворклет положил в него, как
-  // и всё остальное, и клип берётся с хвоста. Пока мотор из хвоста не вытек,
-  // отправлять нечего — ждём ровно столько, сколько его там осталось. Случай
+  // Глухота спасает детектор, но не буфер: морзянку ворклет положил в него как
+  // и всё остальное. Слуху есть смысл подождать, пока она вытечет из хвоста, —
+  // музыка играет, и через пару секунд фрагмент наберётся полной длины. Случай
   // не теоретический: переспрос можно поставить на 5 секунд при фрагменте в 15.
-  const clean = capture.audioTime - deafUntil;
-  if (clean < seconds) {
-    s.nextCheckAt = heard() + (seconds - clean);
-    log('', `todavía hay vibración en el búfer, envío dentro de ${Math.ceil(seconds - clean)} s`);
+  if (!s.closedAt) {
+    const want = Math.min(settings.clip, to - from);
+    const clean = to - deafUntil;
+    if (clean < want) {
+      s.nextCheckAt = heard() + (want - clean);
+      log('', `todavía hay vibración en el búfer, envío dentro de ${Math.ceil(want - clean)} s`);
+      return;
+    }
+    // Слух ограничивает кусок настройкой; ноге длину назначает сам вопрос.
+    from = Math.max(from, to - settings.clip);
+  }
+  // Ноге ждать нечего: вопрос кончился, и всё, что от него было, уже записано.
+  // Значит не ждём, а отрезаем — начало вопроса, если морзянка прошлого ответа
+  // ещё стучала поверх него.
+  // Дно — начало самого буфера, а не начало куска: в кольце лежат последние
+  // BUFFER_SECONDS от «сейчас», и хвост, который мы потом отрежем, место в нём
+  // занимает наравне с куском.
+  from = Math.max(from, deafUntil, capture.audioTime - BUFFER_SECONDS);
+
+  const seconds = to - from;
+  // Хвост, который в кусок не входит: у слуха его нет, у ноги это те полторы
+  // секунды, за которые гейт убедился, что она опустилась.
+  const clip = seconds >= 1 ? capture.makeClip(seconds, capture.audioTime - to) : null;
+  if (!clip) {
+    // Слух попробует снова на следующем кадре — музыка играет, и через секунду
+    // брать будет что. Закрытый вопрос второй попытки не получит: сказать, что
+    // от него ничего не осталось, и закрыть, иначе он так и будет пытаться.
+    if (s.closedAt) {
+      log('warn', 'la pregunta ha salido demasiado corta o se ha grabado bajo la vibración: no hay nada que enviar');
+      s.nextCheckAt = Infinity;
+    }
     return;
   }
-
-  const clip = capture.makeClip(seconds);
-  if (!clip) return;
 
   inFlight = true;
   refreshStatus();
@@ -746,7 +836,10 @@ function handleMatch(result, req) {
     // Кусок, к которому относится ответ, мог кончиться, пока запрос был в
     // полёте: закрыть запись потом будет уже некому, и в истории она осталась
     // бы играющей вечно. Закрываем сразу — по границе, а не по «сейчас».
-    if (!req.live()) closeEntry(entry, s === session ? s.segmentAtWall : Date.now());
+    // Ногой конец известен точно — это её движение вниз. У слуха точного нет:
+    // берём начало следующего куска, если он уже есть, и «сейчас», если сессии
+    // не стало вовсе.
+    if (!req.live()) closeEntry(entry, s.closeWall || (s === session ? s.segmentAtWall : Date.now()));
     renderHistory();
     renderNow(true);
     log('ok', `${result.artist} — ${result.title}`);
@@ -764,7 +857,10 @@ function handleNoMatch(req) {
   log('warn', 'sin coincidencias');
   if (!req.live()) return;
   const { s } = req;
-  if (s.misses < MISS_RETRIES) {
+  // Повтор берёт следующий кусок того же трека, где материал получше. У
+  // закрытого ногой вопроса следующего куска нет: тот же самый вернул бы
+  // тот же ответ.
+  if (!s.closedAt && s.misses < MISS_RETRIES) {
     s.misses++;
     s.nextCheckAt = heard() + MISS_RETRY_SEC;
     log('', `probaré con otro fragmento dentro de ${MISS_RETRY_SEC} s`);
@@ -1043,9 +1139,10 @@ function render() {
       ? 'midiendo el ruido de la sala'
       : session
         ? (session.solved ? 'canción identificada'
-          : settings.pose ? 'pregunta en curso, reuniendo el fragmento'
+          : session.closedAt ? 'pregunta cerrada, esperando la respuesta'
+          : poseActive() ? 'grabando la pregunta, la pierna está arriba'
           : 'suena música, reuniendo el fragmento')
-        : settings.pose ? 'esperando la pierna' : 'esperando música';
+        : poseActive() ? 'esperando la pierna' : 'esperando música';
 
   updateNowTimer();
 
@@ -1197,7 +1294,7 @@ function setThemeColor(color) {
 function blankStatus() {
   const state = !running ? 'detenido'
     : inFlight ? 'reconociendo'
-    : settings.pose ? (poseGate?.up ? 'pierna arriba' : 'pierna abajo')
+    : poseActive() ? (poseGate?.up ? 'pierna arriba' : 'pierna abajo')
     : gate?.playing ? 'suena música'
     : 'escuchando';
   const last = current ? `${current.artist} — ${current.title}` : 'todavía no se ha reconocido nada';
@@ -1278,6 +1375,55 @@ function applyGate() {
   gate?.configure({ threshold: settings.threshold, releaseSec: settings.silence });
 }
 
+/**
+ * Переключатель режима активации. Два радио, а не галочка: режима ровно два,
+ * они исключают друг друга, и у каждого свой набор настроек. Хранится это
+ * по-прежнему одним флагом `pose` — от того, что выключатель стал парой кнопок,
+ * сохранённые настройки менять незачем.
+ */
+function bindMode() {
+  const inputs = [[$('setModeEar'), false], [$('setModePose'), true]];
+  for (const [input, pose] of inputs) {
+    input.checked = settings.pose === pose;
+    // change, а не click: стрелками по радиогруппе ходят тоже, и клика там нет.
+    input.addEventListener('change', () => {
+      if (!input.checked) return;
+      settings.pose = pose;
+      saveSettings();
+      applyMode();
+    });
+  }
+}
+
+// Настройки слуха при выбранной ноге не прячутся из аккуратности: слух в этом
+// режиме считает оценку и рисует монитор, но вопроса не открывает, не закрывает
+// и не отправляет — а значит ни длина фрагмента, ни порог, ни пауза, ни
+// переспрос ни на что не влияют. Оставленные на виду, они читались бы как
+// ручки, которых просто не хватило.
+function refreshModeUI() {
+  $('earSettings').hidden = settings.pose;
+  $('poseSettings').hidden = !settings.pose;
+}
+
+/**
+ * Режим меняют и посреди работы: датчик поднимается на месте, а снятая нога
+ * опускает его обратно, чтобы он не жёг батарею впустую.
+ */
+async function applyMode() {
+  refreshModeUI();
+  refreshPoseHint();
+  refreshStatus();
+  if (!running) return;
+  // Открытый вопрос принадлежал прежнему выключателю, и закрыть его новому
+  // нечем: слух ждёт паузы, которой при поднятой ноге не будет, а нога —
+  // движения, которого при опущенной не случится.
+  if (session) endSession('ha cambiado quién decide: pregunta cerrada');
+  if (!settings.pose) return stopPose();
+  if (!settings.poseAxis) return promptForCalibration();
+  if (await ensurePose()) poseGate.arm();
+  refreshStatus();
+}
+
 // Длина фрагмента задаёт и момент отправки, и минимальную длину трека, который
 // вообще может быть распознан. Из подписи «8 с» не следует ни то, ни другое,
 // поэтому последствие считается и показывается прямо под ползунком.
@@ -1286,24 +1432,28 @@ function refreshClipHint() {
   $('setClipHint').textContent =
     `El envío se hace en el segundo ${at} de la canción; el fragmento va del segundo ${LEAD_IN} al ${at}. ` +
     `Si la canción dura menos de ${at} s, en la huella entrará la pausa que viene después. ` +
-    `AudD trabaja con más seguridad a partir de 10 s, pero no toda canción los tiene.`;
+    `AudD trabaja con más seguridad a partir de 10 s, pero no toda canción los tiene. ` +
+    `Con la pierna no hace falta: la pregunta dura lo que usted la tenga levantada, y eso es lo que se manda.`;
 }
 
-// Что сейчас включено и что от этого следует. Галочка без калибровки не делает
+// Что сейчас выбрано и что из этого следует. Нога без калибровки не решает
 // ничего, и молчать об этом нельзя: со стороны это выглядит сломанным
 // выключателем, а не невыполненным условием.
 function refreshPoseHint() {
   const ready = Boolean(settings.poseAxis);
   $('setPoseHint').textContent = !settings.pose
-    ? 'Ahora decide el oído: la aplicación nota por sí misma que ha empezado a sonar una canción. '
+    ? 'Decide el oído: la aplicación nota por sí misma que ha empezado a sonar una canción. '
       + 'Con la pierna decide usted, y en una sala eso no es lo mismo: entre pregunta y pregunta suena '
       + 'música de fondo, y el oído abre el reconocimiento donde no hay nada que preguntar.'
     : ready
-      ? 'Levante la pierna cuando empiece la pregunta y bájela cuando termine. El oído sigue midiendo '
-        + 'y se ve en el monitor, pero ya no abre ni cierra nada: mandar dos interruptores a la vez '
-        + 'sobre una misma lámpara sale peor que uno.'
+      ? 'Levante la pierna cuando empiece la pregunta: se graba mientras la tenga arriba. Al bajarla, '
+        + 'lo grabado se manda a reconocer entero, dure lo que dure — así cada ronda del concurso puede '
+        + 'llevar su propio tiempo sin tocar nada. El oído sigue midiendo y se ve en el monitor, pero ya '
+        + 'no abre ni cierra nada, y por eso sus ajustes tampoco se muestran aquí: con la pierna puesta '
+        + 'ninguno de ellos cambia nada.'
       : 'Falta calibrar: sin saber hacia dónde gira el teléfono al levantar la pierna, para él levantarla '
-        + 'y bajarla son el mismo movimiento. Hasta entonces sigue decidiendo el oído.';
+        + 'y bajarla son el mismo movimiento. Hasta entonces sigue decidiendo el oído, con los valores '
+        + 'que tuviera guardados.';
 
   // Пока калибровка идёт, эту строку ведёт она сама: там по шагам сказано,
   // что делать ногой, и затирать это общим описанием нельзя.
@@ -1516,16 +1666,7 @@ function initSettings() {
   });
   bindRange('setBlankHold', 'blankHold', (v) => `${v} s`);
 
-  // Галочку можно щёлкнуть и посреди работы: датчик поднимается на месте, а
-  // выключенная — опускает его обратно, чтобы он не жёг батарею впустую.
-  bindCheck('setPose', 'pose', async () => {
-    refreshPoseHint();
-    if (!running) return;
-    if (!settings.pose) return stopPose();
-    if (!settings.poseAxis) return promptForCalibration();
-    if (await ensurePose()) poseGate.arm();
-    refreshStatus();
-  });
+  bindMode();
   bindRange('setPoseStep', 'poseStep', (v) => `${v.toFixed(1)}°`, () => {
     poseGate?.configure({ minAngle: settings.poseStep });
   });
@@ -1533,6 +1674,7 @@ function initSettings() {
 
   refreshClipHint();
   refreshMorseHint();
+  refreshModeUI();
   refreshPoseHint();
 
   // Единственный способ узнать, доходит ли вибрация до этого телефона, — не

@@ -310,16 +310,28 @@ export class AudioCapture {
   }
 
   /** WAV с последними seconds секундами — или меньше, если столько ещё не накопилось. */
-  makeClip(seconds) {
+  /**
+   * Кусок из буфера. `skipSeconds` отрезает хвост: конец нужного отрезка не
+   * всегда «сейчас». Ногой вопрос закрывается за полторы секунды до того, как
+   * гейт в этом убедится, и эти полторы секунды — уже не вопрос, а пауза после
+   * него; в отпечатке им делать нечего ровно по той же причине, по которой
+   * туда не берут первые такты.
+   */
+  makeClip(seconds, skipSeconds = 0) {
     if (!this.ring) return null;
-    const want = Math.ceil(seconds * this.ctx.sampleRate);
-    const raw = this.ring.readLast(want);
-    if (raw.length < this.ctx.sampleRate) return null; // меньше секунды — бессмысленно
+    const rate0 = this.ctx.sampleRate;
+    const skip = Math.max(0, Math.round(skipSeconds * rate0));
+    const want = Math.ceil(seconds * rate0);
+    const tail = this.ring.readLast(want + skip);
+    // readLast мог отдать меньше запрошенного — буфер ещё не полон. Отрезаем
+    // от конца, поэтому сколько бы ни пришло, лишним оказывается тот же хвост.
+    const raw = skip ? tail.subarray(0, Math.max(0, tail.length - skip)) : tail;
+    if (raw.length < rate0) return null; // меньше секунды — бессмысленно
     // В заголовок идёт та частота, в которой клип реально лежит, — иначе он
     // воспроизводится не на своей скорости и AudD не найдёт ничего.
-    const rate = clipRate(this.ctx.sampleRate);
-    const pcm = resample(raw, this.ctx.sampleRate, rate);
-    return { blob: encodeWav(pcm, rate), seconds: raw.length / this.ctx.sampleRate };
+    const rate = clipRate(rate0);
+    const pcm = resample(raw, rate0, rate);
+    return { blob: encodeWav(pcm, rate), seconds: raw.length / rate0 };
   }
 
   async stop() {
