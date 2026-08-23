@@ -53,12 +53,12 @@ const DEFAULTS = {
   morseGapSym: 3,      // между точками и тире внутри буквы
   morseGapLetter: 8,   // между буквами; обязан быть заметно больше предыдущего
   morseGapRepeat: 16,  // на стыке: после метки и между проходами
-  // Метка начала: перед именем стучится всегда одна и та же буква, O. Ответ
-  // приходит без предупреждения, и пока рука сообразила, что телефон вибрирует,
-  // первая буква имени уже прошла; метка забирает этот момент себе — теряется
-  // она, а не начало ответа. Буквой имени она не считается и в отмеренную
-  // пятёрку не входит. Включена, потому что делает работу второго прохода —
-  // бережёт начало — втрое дешевле его: 3.7 секунды против 11.
+  // Метка начала: перед именем стучится всегда одна и та же буква, T — одно
+  // тире. Ответ приходит без предупреждения, и пока рука сообразила, что телефон
+  // вибрирует, первая буква имени уже прошла; метка забирает этот момент себе —
+  // теряется она, а не начало ответа. Буквой имени она не считается и в
+  // отмеренную пятёрку не входит. Включена, потому что делает работу второго
+  // прохода — бережёт начало — почти впятеро дешевле его: 2.3 секунды против 11.
   morseMark: true,
   // Повтор удваивает и без того немалое время: среднее имя канона — 9 секунд
   // одним проходом и 20 двумя, дольше самого трека-вопроса. Начало теперь
@@ -1600,8 +1600,9 @@ function refreshMorseHint() {
     `la primera letra del nombre ya ha pasado. La marca se queda con ese momento: lo que se pierde es ella y no el principio de la respuesta. ` +
     `Además no cuenta como letra del nombre y no entra en las ${settings.morseLetters} ` +
     `${plural(settings.morseLetters, 'letra', 'letras')} previstas. ` +
-    `Se ha elegido la O aunque la S sea cuatro puntos más corta: una marca delante de un nombre que empieza por esa misma letra ` +
-    `da dos códigos iguales seguidos, y de los doscientos del canon 22 empiezan por S y cinco por O. ` +
+    `Se ha elegido la T, una raya sola: quien avisa no es la marca sino la pausa que viene tras ella, así que alargarla no compra nada. ` +
+    `Y una marca delante de un nombre que empieza por esa misma letra da dos códigos iguales seguidos: de los 250 del canon empiezan ` +
+    `por T siete y por S treinta y dos, así que la T sale tan segura como la O y mucho más corta. ` +
     `Cuesta ${secs(markMs)} en cada pasada, frente a ${secs(repeatMs)} de una segunda pasada del mismo nombre.` +
     (settings.morseMark ? '' : ' Ahora el nombre empieza directamente por su primera letra.');
 
