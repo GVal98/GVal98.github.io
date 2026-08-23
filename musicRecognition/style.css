@@ -334,6 +334,29 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 }
 .settings-grid .field-label b { color: var(--text); font-variant-numeric: tabular-nums; }
 .settings-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.field--wide { grid-column: 1 / -1; }
+
+/* Порядок калибровки. Список читают до того, как телефон уедет в карман,
+   а подсветка нужна после: кто может смотреть на экран, видит по ней, какого
+   движения ждут сейчас. */
+.cal-steps {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 6px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.cal-steps b { color: var(--text); font-weight: 600; }
+.cal-steps li::marker { font-variant-numeric: tabular-nums; }
+.cal-steps li.is-now { color: var(--text); }
+.cal-steps li.is-now::marker { color: var(--accent); }
+.cal-steps li.is-done { opacity: 0.45; }
+/* Отказ и успех надо различать с одного взгляда: читать его будут
+   между двумя попытками, а не в спокойной обстановке. */
+#setPoseCalHint.is-warn { color: var(--warn); }
+#setPoseCalHint.is-ok { color: var(--accent); }
 .settings-head {
   margin: 22px 0 0;
   font-size: 13px;

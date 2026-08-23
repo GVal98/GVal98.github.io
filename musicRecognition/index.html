@@ -245,12 +245,28 @@
     </div>
 
     <div class="settings-grid" id="poseSettings">
-      <div class="field">
+      <div class="field field--wide">
         <span class="field-label">Dirección del movimiento</span>
+        <small id="setPoseCalHint"></small>
+        <!-- La calibración se hace con el teléfono en el bolsillo: en ese momento la
+             pantalla no se ve. Por eso los pasos y lo que significa cada vibración
+             están aquí siempre, para leerlos antes de guardarlo, y no aparecen al
+             pulsar el botón. -->
+        <ol class="cal-steps" id="poseCalSteps">
+          <li>Guárdelo en el bolsillo donde vaya a llevarlo y siéntese como en el concurso.</li>
+          <li>Quieto un segundo, suba la pierna, quieto otro segundo.
+            <b>Una vibración corta</b>: tomado.</li>
+          <li>Quieto un segundo, baje la pierna, quieto otro segundo.
+            <b>Dos vibraciones largas</b>: calibrado, ya está.</li>
+        </ol>
+        <small>El aviso llega segundo y medio después del movimiento, no en el acto: no lo
+          repita antes de tiempo. <b>Tres vibraciones muy cortas</b> quieren decir que el
+          movimiento no ha contado y hay que repetirlo; el motivo aparece aquí arriba. Si no
+          vibra nada, el teléfono no ha llegado a ver el movimiento: hace falta estar quieto
+          antes de moverse, no solo después.</small>
         <div class="settings-actions">
           <button class="btn btn--ghost btn--sm" id="calibratePoseBtn">Calibrar</button>
         </div>
-        <small id="setPoseCalHint"></small>
       </div>
 
       <label class="field">

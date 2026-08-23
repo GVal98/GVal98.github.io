@@ -646,17 +646,50 @@ function closeEntry(entry, at = Date.now()) {
 // нога решает, какой вопрос спрашивать, а фрагмент всё равно берётся из звука.
 
 // Подтверждения ноги. Телефон в кармане, смотреть на экран нельзя — значит,
-// сказать «принято» можно только мотором. Молчание при этом тоже ответ:
-// движение, не прошедшее пороги, не подтверждается ничем, и по отсутствию
-// вибрации видно, что нога не засчиталась и её надо повторить.
+// сказать «принято» можно только мотором. В работе молчание тоже ответ:
+// движение, не прошедшее пороги, не подтверждается ничем, и трясти ногу на
+// каждую возню в кармане было бы хуже, чем промолчать.
+//
+// В калибровке наоборот. Там человек ждёт ответа на каждое движение, и
+// молчание неотличимо от «датчик не работает»: он повторяет одно и то же, не
+// зная, что именно не так. Поэтому там есть и третий ответ — «не в счёт».
 const POSE_BUZZ = {
   step: [120],            // калибровка: движение принято, давай следующее
   done: [400, 150, 400],  // калибровка: ось снята
+  // Калибровка: движение разобрано и отброшено. Короче и чаще всего
+  // остального: отказ должен читаться как отказ, а не как ещё одно «принято».
+  retry: [60, 90, 60, 90, 60],
   up: [120],              // квиз: пишем вопрос
   down: [120, 120, 120],  // квиз: вопрос ушёл в AudD — два коротких против одного
 };
 
-const setPoseCal = (text) => { $('setPoseCalHint').textContent = text; };
+// Калибровка ждёт человека, а не наоборот: пока он усаживается и прилаживает
+// телефон, минута проходит легко. Но и висеть вечно ей нельзя: брошенная, она
+// держит датчик поднятым и жжёт батарею, а на экране остаётся надпись, будто
+// чего-то всё ещё ждут. Счёт идёт от последнего разобранного движения, а не от
+// нажатия: кто пробует снова и снова, тот калибрует, а не бросил.
+const CAL_TIMEOUT_SEC = 120;
+let calTimer = 0;
+
+const setPoseCal = (text, tone = '') => {
+  const el = $('setPoseCalHint');
+  el.textContent = text;
+  el.classList.toggle('is-warn', tone === 'warn');
+  el.classList.toggle('is-ok', tone === 'ok');
+};
+
+/**
+ * Какого движения ждут сейчас: 1 — поднять ногу, 2 — опустить, 0 — калибровка
+ * не идёт. Сам список висит всегда: его читают до того, как телефон уедет в
+ * карман. Подсветка — тем, кто калибрует, глядя на экран.
+ */
+function setPoseCalStep(n) {
+  const items = $('poseCalSteps').children;
+  for (let i = 0; i < items.length; i++) {
+    items[i].classList.toggle('is-now', n > 0 && i === n);
+    items[i].classList.toggle('is-done', n > 0 && i < n);
+  }
+}
 
 /** Без оси гейт видит движение, но не знает, что оно значит. Ведём к кнопке. */
 function promptForCalibration() {
@@ -696,15 +729,52 @@ function stopPose() {
   poseSensor?.stop();
   poseSensor = null;
   poseGate = null;
+  // Датчика больше нет, значит и калибровки нет — как бы она ни кончилась.
+  // Оставить кнопку в положении «Cancelar» значило бы обещать движение,
+  // которое некому принять.
+  endCal();
+}
+
+/** Вернуть блок к виду «калибровка не идёт»: кнопка, шаги, общая подсказка. */
+function endCal() {
+  clearTimeout(calTimer);
+  calTimer = 0;
+  $('calibratePoseBtn').textContent = 'Calibrar';
+  setPoseCalStep(0);
   refreshPoseHint();
+}
+
+/** Часы пошли заново: каждое разобранное движение — признак, что калибруют. */
+function armCalTimeout() {
+  clearTimeout(calTimer);
+  calTimer = setTimeout(() => cancelCalibration('se ha agotado el tiempo de espera',
+    'Calibración interrumpida: dos minutos sin un solo movimiento. Vuelva a empezar con «Calibrar».'),
+    CAL_TIMEOUT_SEC * 1000);
+}
+
+/** Свернуть калибровку, не сняв оси. Прежняя, если была, остаётся в силе. */
+function cancelCalibration(why, note = '') {
+  poseGate?.stopCalibration();
+  log('', `calibración de la pierna: ${why}`);
+  // При выключенном микрофоне датчик держался только ради калибровки.
+  if (running) endCal();
+  else stopPose();
+  // После endCal, иначе refreshPoseHint затрёт: там своя строка на этот случай.
+  if (note) setPoseCal(note, 'warn');
 }
 
 async function startCalibration() {
   showError('');
+  // Кнопка одна на оба действия: пока калибровка идёт, «Calibrar» уже нажато,
+  // и нужно ей ровно противоположное.
+  if (poseGate?.calibrating) return cancelCalibration('cancelada');
   if (!await ensurePose()) return;
   poseGate.calibrate();
-  setPoseCal('Guarde el teléfono donde vaya a estar, siéntese como en el concurso y levante la pierna. '
-    + 'El teléfono lo confirmará con una vibración corta.');
+  armCalTimeout();
+  setPoseCalStep(1);
+  $('calibratePoseBtn').textContent = 'Cancelar';
+  setPoseCal('Guarde el teléfono donde vaya a estar, siéntese como en el concurso y levante la '
+    + 'pierna: quieto un segundo antes y otro después. El aviso tarda segundo y medio en llegar.');
   log('', 'calibración de la pierna: esperando el primer movimiento');
 }
 
@@ -713,8 +783,11 @@ function onPoseStep(e) {
   const deg = (v) => `${Math.abs(v).toFixed(1)}°`;
 
   if (e.verdict === 'calibrating') {
+    armCalTimeout();
     poseBuzz(POSE_BUZZ.step);
-    setPoseCal(`Movimiento tomado (${deg(e.along)}). Ahora baje la pierna y quédese quieto un momento.`);
+    setPoseCalStep(2);
+    setPoseCal(`Movimiento tomado (${deg(e.along)}). Ahora baje la pierna: quieto un segundo antes `
+      + 'y otro después.', 'ok');
     log('', `calibración: pierna levantada, ${deg(e.along)}`);
     return;
   }
@@ -722,7 +795,7 @@ function onPoseStep(e) {
     settings.poseAxis = poseGate.axis;
     saveSettings();
     poseBuzz(POSE_BUZZ.done);
-    refreshPoseHint();
+    endCal();
     // До калибровки решал слух, даже если переключатель стоял на ноге. Теперь
     // решает нога — и в шапке должно быть написано именно это.
     refreshStatus();
@@ -730,6 +803,24 @@ function onPoseStep(e) {
     // Калибруют и при выключенном приложении. Дальше датчику делать нечего:
     // пока никто не слушает, включать ногой нечего.
     if (!running) stopPose();
+    return;
+  }
+  // Отказ в калибровке — половина разговора, и он идёт раньше всего прочего.
+  // Калибруют при выключенном микрофоне, а всё, что ниже, отсекается проверкой
+  // на `capture`: попади эта ветка туда, движение отбрасывалось бы совсем
+  // молча. Сюда доходят только `long` и `small` — остальные вердикты гейт
+  // выносит уже после калибровочной ветки.
+  if (poseGate?.calibrating) {
+    armCalTimeout();
+    poseBuzz(POSE_BUZZ.retry);
+    setPoseCal(e.verdict === 'long'
+      ? `No cuenta: el movimiento ha durado ${e.moveSec.toFixed(1)} s, demasiado para un cambio `
+        + 'de postura. Guardar el teléfono en el bolsillo dura eso; la pierna, menos de un segundo. '
+        + 'Repítalo, y quédese quieto antes de empezar.'
+      : `No cuenta: el teléfono ha girado ${deg(e.angle)} y hacen falta `
+        + `${settings.poseStep.toFixed(1)}°. Suba la pierna del todo, o baje el umbral aquí abajo.`,
+      'warn');
+    log('warn', `calibración: movimiento no contado (${e.verdict}, ${deg(e.angle)}, ${e.moveSec.toFixed(1)} s)`);
     return;
   }
   // Датчик переживает выключенный микрофон: калибруют и при остановленном
@@ -1688,8 +1779,8 @@ function refreshPoseHint() {
       ? 'Calibrado. Vuelva a hacerlo si cambia de bolsillo o de sitio para el teléfono: lo que se guarda '
         + 'es la dirección del giro, y depende de cómo quede ahí dentro. Con cada cambio de postura '
         + 'la dirección se afina sola, así que una calibración vieja se corrige a los pocos movimientos.'
-      : 'Sin calibrar. Son dos movimientos: levantar la pierna y volver a bajarla, con una pausa entre '
-        + 'ellos. Guardar el teléfono en el bolsillo no cuenta como ninguno de los dos, dura demasiado.');
+      : 'Sin calibrar. Son dos movimientos, y el teléfono confirma cada uno vibrando: léase los '
+        + 'tres pasos antes de guardárselo, porque a partir de ahí la pantalla ya no se ve.');
   }
 }
 
