@@ -1853,7 +1853,7 @@ function refreshMorseHint() {
     `Además, la pestaña debe estar abierta en pantalla: ningún navegador deja pasar la vibración desde segundo plano, y el iPhone no la admite en absoluto.`;
 
   $('setMorseLettersHint').textContent =
-    `Solo alfabeto latino: el cirílico se translitera, cada cifra pasa a ser la primera letra de su nombre en inglés (2 → T), ` +
+    `Solo alfabeto latino: el cirílico se translitera, cada cifra pasa a ser la letra que le toca por orden en el alfabeto (1 es A, 2 es B, 9 es I; la 3 es S y el 0, O), ` +
     `los espacios y los signos se descartan, y el artículo The al principio del nombre no se marca en absoluto: se llevaría ` +
     `tres de las cinco letras sin distinguir nada con ellas. Cada letra de más son ${secs(perLetterMs())} más de vibración.`;
 
@@ -1872,6 +1872,8 @@ function refreshMorseHint() {
     `y, si no, K («Coldplay» → KOLDPLAI); CH es SH. ` +
     `Las letras dobles se colapsan en una: en el motor son dos códigos iguales seguidos, y distinguirlos ` +
     `de uno solo depende únicamente de la duración de la pausa entre ambos — «Iggy» → IGI, «Black» → BLAK. ` +
+    `Las cifras se quedan fuera de todo esto: recorren las reglas como cifras y solo al final se vuelven letras, ` +
+    `así que ni se colapsan entre sí ni las tocan las demás reglas — 1900 se marca AIOO y no AIO, y 55 sigue siendo EE y no I. ` +
     `El par EE es I, sin excepciones: «Queen» → KUIN, «Green Day» → GRIND. ` +
     `El par EA es también I («The Beatles» → BITLE), salvo en EAR, EAD y EATH: «Pearl Jam» se queda como está. ` +
     `El par TH es T: su sonido es uno solo y en los nombres casi siempre sordo («Thunder» → TUNDE, «Anthrax» → ANTRA), ` +
@@ -1966,10 +1968,10 @@ function refreshSystemHint() {
     + `por defecto, y por eso trae ejemplos en vez de solo pedir brevedad —a secas, el modelo la entiende `
     + `como «una frase corta» y repite la pregunta antes de contestar. Dejar el campo en blanco devuelve `
     + `esa indicación por defecto. `
-    + `Los números no llegan de ninguna manera: cada cifra se marca con la inicial de su nombre en inglés, `
-    + `y ahí el 2 y el 3, el 4 y el 5, el 6 y el 7 caen en la misma letra — 1989 llega como `
-    + `${morse.word(spell('1989'))} y 1945, como ${morse.word(spell('1945'))}. Un año, una fecha o un `
-    + `resultado hay que mirarlos en la pantalla.`;
+    + `Los números llegan enteros, pero hay que descifrarlos: cada cifra se marca con la letra que le toca `
+    + `por orden en el alfabeto —1 es A, 2 es B, 9 es I; la 3 es S y el 0, O—, y así 1989 llega como `
+    + `${morse.word(spell('1989'))} y 1945, como ${morse.word(spell('1945'))}. Al tacto se leen, pero contando `
+    + `letras del alfabeto mientras suena la siguiente pregunta: una palabra sigue siendo más barata que un año.`;
 }
 
 // Цена одной буквы — не константа: она зависит и от кода буквы, и от всех пауз.
