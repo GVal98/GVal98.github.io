@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Respuestas del concurso</title>
-<meta name="description" content="Escucha el micrófono y contesta las preguntas del concurso: reconoce las canciones con AudD, responde las demás con un modelo y marca la respuesta vibrando.">
+<meta name="description" content="Marque la pregunta del concurso con la pierna, sin sacar el teléfono del bolsillo: se graba, se reconoce la canción con AudD o la contesta un modelo, y la respuesta llega vibrando.">
 <meta name="theme-color" content="#0b0d12">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
 <link rel="stylesheet" href="./style.css">
@@ -50,21 +50,23 @@
   <details class="card about">
     <summary>Cómo funciona</summary>
     <p class="hint">
-      Escucha el micrófono y detecta por sí solo que ha empezado a sonar música.
-      Sostenga el dispositivo de modo que se oigan los altavoces: importa más el
+      Escucha el micrófono y graba en un búfer, pero no decide nada por su
+      cuenta: la pregunta la marca usted con la pierna, sin sacar el teléfono
+      del bolsillo. Levantarla abre la pregunta, bajarla la manda a reconocer.
+      El fragmento dura lo que ha durado la pregunta, y da igual que cada ronda
+      del concurso lleve su propio tiempo. Cada movimiento se confirma con el
+      motor —una vibración corta al empezar a grabar, dos al enviar—, así que
+      tampoco hace falta mirar la pantalla para saber en qué está. Lleve el
+      teléfono donde se oigan los altavoces: para lo que se graba importa más el
       volumen que la cercanía.
     </p>
     <p class="hint">
-      También puede marcarlo usted con la pierna, sin sacar el teléfono del
-      bolsillo: levantarla abre la pregunta, bajarla la manda a reconocer. El
-      fragmento dura entonces lo que ha durado la pregunta, y da igual que cada
-      ronda del concurso lleve su propio tiempo. Cada movimiento se confirma con
-      el motor —una vibración corta al empezar a grabar, dos al enviar—, así que
-      tampoco hace falta mirar la pantalla para saber en qué está. El teléfono no reconoce la
-      postura en sí —en el bolsillo la diferencia es un giro de dos grados, y de
-      un día para otro se pierde entre lo que cambia el propio bolsillo—, sino el
-      momento en que pasa de una a otra. Por eso hay que calibrar antes: una vez
-      levantada y bajada la pierna, para que sepa hacia dónde gira.
+      El teléfono no reconoce la postura en sí —en el bolsillo la diferencia es
+      un giro de dos grados, y de un día para otro se pierde entre lo que cambia
+      el propio bolsillo—, sino el momento en que pasa de una a otra. Por eso
+      hay que calibrar antes: una vez levantada y bajada la pierna, para que
+      sepa hacia dónde gira. Sin calibrar no hay con qué abrir una pregunta y la
+      aplicación no llega ni a encender el micrófono.
     </p>
     <p class="hint">
       No todas las preguntas de un concurso son canciones. En «Ajustes» se elige qué
@@ -78,40 +80,11 @@
       descifrarlas cuesta más que leer una palabra.
     </p>
     <p class="hint">
-      «Ocultar pantalla» retira la página entera: la aplicación sigue escuchando y
+      «Ocultar pantalla» retira la página entera: la aplicación sigue grabando y
       marcando en morse, pero la pantalla queda vacía, sin título de la canción ni
       ajustes. La pantalla se mantiene encendida; si se apagara, también callaría la
       vibración. Para volver, mantenga pulsado.
     </p>
-  </details>
-
-  <!-- Живой монитор. Фаза стоит в самой шапке: она одна и нужна на ходу,
-       а спектр с полосками смотрят, только когда что-то пошло не так. -->
-  <details class="card monitor" id="monitor" hidden>
-    <summary>Qué se oye ahora<span class="phase" id="phaseLabel">silencio</span></summary>
-
-    <canvas id="spectrum" height="90" aria-label="Espectro del sonido entrante"></canvas>
-
-    <div class="gauge">
-      <div class="gauge-track">
-        <div class="gauge-fill" id="scoreFill"></div>
-        <div class="gauge-mark" id="scoreMark" title="Umbral de activación"></div>
-      </div>
-      <div class="gauge-meta">
-        <span>Parece música</span>
-        <b id="scoreValue">0%</b>
-      </div>
-    </div>
-
-    <div class="factors">
-      <div class="factor"><span>Volumen</span><i><u id="fLevel"></u></i></div>
-      <div class="factor"><span>Tonalidad</span><i><u id="fTone"></u></i></div>
-      <div class="factor"><span>Graves</span><i><u id="fBass"></u></i></div>
-      <div class="factor"><span>Continuidad</span><i><u id="fFlow"></u></i></div>
-      <div class="factor"><span>Dinámica</span><i><u id="fDyn"></u></i></div>
-    </div>
-
-    <p class="readout" id="readout"></p>
   </details>
 
   <!-- Сейчас играет. В шапке остаётся только «сейчас» или «последний»:
@@ -193,59 +166,12 @@
       </label>
     </div>
 
-    <!-- Un solo interruptor para las dos maneras de marcar dónde empieza y
-         acaba la pregunta. Antes eran una casilla, y los ajustes del oído
-         seguían a la vista con la pierna puesta aunque ya no mandaran nada:
-         el oído entonces sigue midiendo, pero no abre, no cierra y no envía. -->
-    <h3 class="settings-head">Quién marca las preguntas</h3>
-    <div class="modes" role="radiogroup" aria-label="Quién marca las preguntas">
-      <label class="mode">
-        <input type="radio" name="activation" id="setModeEar">
-        <span>El oído</span>
-      </label>
-      <label class="mode">
-        <input type="radio" name="activation" id="setModePose">
-        <span>La pierna</span>
-      </label>
-    </div>
+    <!-- Единственный выключатель: нога. Слух здесь только пишет в буфер —
+         начало и конец вопроса размечает движение, а не звук. -->
+    <h3 class="settings-head">La pierna</h3>
     <p class="hint" id="setPoseHint"></p>
 
-    <div class="settings-grid" id="earSettings">
-      <!-- Длина фрагмента живёт у слуха, потому что у слуха она и решается:
-           часами. Ногой её назначает сама нога — вопрос длится столько,
-           сколько она поднята, и отмерять тут нечего. -->
-      <label class="field">
-        <span class="field-label">Duración del fragmento — <b id="setClipVal"></b></span>
-        <input type="range" id="setClip" min="5" max="15" step="1">
-        <small id="setClipHint"></small>
-      </label>
-
-      <label class="field">
-        <span class="field-label">Umbral de «esto es música» — <b id="setThresholdVal"></b></span>
-        <input type="range" id="setThreshold" min="0.2" max="0.9" step="0.01">
-        <small>Más bajo: se activa más a menudo y se equivoca con el ruido. Más alto: se le escapa la música baja.</small>
-      </label>
-
-      <label class="field">
-        <span class="field-label">Pausa = la canción ha terminado — <b id="setSilenceVal"></b></span>
-        <input type="range" id="setSilence" min="1" max="10" step="1">
-        <small>Debe ser más corta que la pausa entre preguntas: así cada pregunta es
-          una canción distinta. Si es más larga, las preguntas se pegarán en una sola
-          y la aplicación solo notará las siguientes por un corte en la música o por
-          una reconsulta.</small>
-      </label>
-
-      <label class="field">
-        <span class="field-label">Volver a preguntar mientras suena la música — <b id="setRecheckVal"></b></span>
-        <input type="range" id="setRecheck" min="0" max="60" step="5">
-        <small>Seguro para cuando la música no llega a callarse: en la pausa entre
-          preguntas suena música de fondo y la aplicación no ve que la pregunta ha
-          cambiado. Cada reconsulta es una solicitud más a AudD, aunque siga sonando
-          la misma canción. 0 — no volver a preguntar.</small>
-      </label>
-    </div>
-
-    <div class="settings-grid" id="poseSettings">
+    <div class="settings-grid">
       <div class="field field--wide">
         <span class="field-label">Dirección del movimiento</span>
         <small id="setPoseCalHint"></small>

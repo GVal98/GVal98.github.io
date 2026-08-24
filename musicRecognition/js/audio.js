@@ -210,14 +210,13 @@ export class AudioCapture {
   /**
    * @param {object} opts
    * @param {number} opts.bufferSeconds  глубина кольцевого буфера
-   * @param {(features: {analyser: AnalyserNode, samples: number}) => void} opts.onFrame
+   * @param {(frame: {samples: number}) => void} opts.onFrame
    */
   constructor({ bufferSeconds = 30, onFrame } = {}) {
     this.bufferSeconds = bufferSeconds;
     this.onFrame = onFrame;
     this.ctx = null;
     this.stream = null;
-    this.analyser = null;
     this.ring = null;
     this.node = null;
     this.source = null;
@@ -249,10 +248,6 @@ export class AudioCapture {
     if (this.ctx.state === 'suspended') await this.ctx.resume();
 
     this.source = this.ctx.createMediaStreamSource(this.stream);
-    this.analyser = this.ctx.createAnalyser();
-    this.analyser.fftSize = 2048;
-    this.analyser.smoothingTimeConstant = 0.3;
-    this.source.connect(this.analyser);
 
     this.ring = new RingBuffer(Math.ceil(this.bufferSeconds * this.ctx.sampleRate));
     this.totalSamples = 0;
@@ -269,9 +264,9 @@ export class AudioCapture {
     const handle = (chunk) => {
       this.ring.push(chunk);
       this.totalSamples += chunk.length;
-      // Кадр детектора привязан к приходу звука, а не к setInterval:
-      // таймеры в фоновой вкладке душатся до 1 Гц, аудиопоток — нет.
-      if (this.onFrame) this.onFrame({ analyser: this.analyser, samples: chunk.length });
+      // Кадр привязан к приходу звука, а не к setInterval: таймеры в фоновой
+      // вкладке душатся до 1 Гц, аудиопоток — нет.
+      if (this.onFrame) this.onFrame({ samples: chunk.length });
     };
 
     if (this.ctx.audioWorklet) {
@@ -344,7 +339,7 @@ export class AudioCapture {
     if (this.source) { try { this.source.disconnect(); } catch { /* уже отключён */ } }
     if (this.stream) this.stream.getTracks().forEach((t) => { t.onended = null; t.stop(); });
     if (this.ctx) await this.ctx.close();
-    this.ctx = this.stream = this.analyser = this.node = this.source = this.ring = null;
+    this.ctx = this.stream = this.node = this.source = this.ring = null;
     this._mute = null;
   }
 }
