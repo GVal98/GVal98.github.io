@@ -720,6 +720,15 @@ function onPoseStep(e) {
   // приложении. Открывать вопрос тогда не на чем — нет ни аудиочасов, ни буфера.
   if (!capture) return;
 
+  // Нога пошла из-под работающего мотора: морзянка прошлого ответа обрывается
+  // на полуслове. Иначе её нечем догнать — пока мотор стучит, приложение глухо,
+  // и новый вопрос писался бы в тишину. Дослушивать имя незачем: спрашивают уже
+  // следующее, а ответ на прошлое и так лежит в журнале.
+  if (e.underMotor) {
+    stopBuzz();
+    log('', `vibración cortada: la pierna se ha movido durante la respuesta (${deg(e.along)})`);
+  }
+
   if (e.verdict === 'up' || e.verdict === 'down') {
     // Ось уточнилась на этой же ступеньке — пусть переживёт вкладку.
     settings.poseAxis = poseGate.axis;
@@ -1475,7 +1484,8 @@ function refreshPoseHint() {
       + 'lo grabado se manda a reconocer entero, dure lo que dure — así cada ronda del concurso puede '
       + 'llevar su propio tiempo sin tocar nada. El teléfono lo confirma sin sacarlo del bolsillo: una '
       + 'vibración corta al empezar a grabar, dos al enviar. Si no vibra, el movimiento no ha contado '
-      + 'y hay que repetirlo.'
+      + 'y hay que repetirlo. Si la respuesta anterior todavía está marcándose en morse, levantar la '
+      + 'pierna la corta a media palabra: empieza la pregunta nueva.'
     : 'Falta calibrar: sin saber hacia dónde gira el teléfono al levantar la pierna, para él levantarla '
       + 'y bajarla son el mismo movimiento. Hasta entonces no hay con qué abrir una pregunta y la '
       + 'aplicación no llega ni a encender el micrófono.';

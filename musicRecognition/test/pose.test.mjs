@@ -128,5 +128,81 @@ console.log('\nЗапас порогов');
   if (steps.length !== 21) fail(`ступенек поз ${steps.length}, а в трёх записях их 21`);
 }
 
+// Полка под мотором: ступенька из-под работающей морзянки.
+//
+// Гоняется по тем же записям, и спрашивается по ним ровно то, что они знают:
+// ловится ли ступенька, когда обычный путь выключен слепотой, и не ловится ли
+// она там, где позу менять не просили. Слепота здесь ставится руками — так же,
+// как её ставит морзянка: за секунду до движения и на всё, что после.
+//
+// Чего записи не знают: как ведёт себя среднее под десятью секундами мотора
+// подряд. Их собственная вибрация — полсекунды на команду, и за неё среднее
+// уезжает на 0.41° при пороге 1°. См. README, «Чего про ногу неизвестно».
+console.log('\nПолка под мотором');
+{
+  const axis = gate.axis;
+  const shade = 1.0;   // за сколько секунд до движения включается мотор
+  const took = [];     // всё, что сторож взял из-под мотора
+  let quiet = 0;
+
+  for (const session of sessions) {
+    const rows = session.samples.map((r) => [r[0] / 1000, r[1], r[2], r[3], Math.hypot(r[7], r[8], r[9])]);
+    // Где на этой записи настоящие ступеньки — по обычному пути, без слепоты.
+    const plain = new PoseGate({ axis });
+    plain.arm();
+    const steps = [];
+    for (const r of rows) {
+      const e = plain.push(...r);
+      if (e && (e.verdict === 'up' || e.verdict === 'down')) {
+        steps.push({ from: r[0] - e.age, verdict: e.verdict, up: plain.up });
+      }
+    }
+
+    /** Прогон с ослеплением в `blindAt` на `sec` секунд. */
+    const underMotor = (up, from, blindAt, sec) => {
+      const g = new PoseGate({ axis });
+      g.arm();
+      g.up = up;
+      const out = [];
+      let blinded = false;
+      for (const r of rows) {
+        if (r[0] < from) continue;
+        if (!blinded && r[0] >= blindAt) { g.blind(sec); blinded = true; }
+        const e = g.push(...r);
+        if (e) out.push({ t: r[0], ...e });
+      }
+      return { out, blinded };
+    };
+
+    for (let i = 0; i < steps.length; i++) {
+      const st = steps[i];
+      const { out, blinded } = underMotor(!st.up, st.from - 3, st.from - shade, 12);
+      if (!blinded) continue;
+      const got = out.filter((e) => e.underMotor);
+      if (!got.length) fail(`${session.name}: ступенька на ${st.from.toFixed(1)} с потерялась под мотором`);
+      else if (got.length > 1) fail(`${session.name}: ступенька на ${st.from.toFixed(1)} с ушла ${got.length} раза`);
+      else if (got[0].verdict !== st.verdict) fail(`${session.name}: под мотором ${got[0].verdict} вместо ${st.verdict}`);
+      else took.push({ ...got[0], lag: got[0].t - st.from });
+
+      // Тот же мотор, но там, где поза не менялась: от конца этой ступеньки
+      // до начала следующей.
+      const till = (steps[i + 1]?.from ?? rows[rows.length - 1][0]) - 1.5;
+      const rest = till - (st.from + 1.5);
+      if (rest < POSE.blindWin * 2) continue;
+      const still = underMotor(st.up, st.from + 0.5, st.from + 1.5, rest);
+      if (still.out.some((e) => e.underMotor)) {
+        fail(`${session.name}: сторож нашёл ступеньку там, где позу не меняли (${st.from.toFixed(1)} с +${rest.toFixed(1)} с)`);
+      } else quiet++;
+    }
+  }
+  console.log(`  поймано под мотором ${took.length} ступенек из 21, тихих отрезков без ложных ${quiet}`);
+  if (took.length) {
+    console.log(`  поворот целиком ${Math.min(...took.map((e) => e.angle)).toFixed(2)}…${Math.max(...took.map((e) => e.angle)).toFixed(2)}°`
+      + `, вдоль оси ${Math.min(...took.map((e) => Math.abs(e.along))).toFixed(2)}…${Math.max(...took.map((e) => Math.abs(e.along))).toFixed(2)}°`);
+    console.log(`  мотор смолкает через ${Math.min(...took.map((e) => e.lag)).toFixed(1)}…${Math.max(...took.map((e) => e.lag)).toFixed(1)} с после начала движения`);
+  }
+  if (took.length < 21) fail(`под мотором поймано ${took.length} ступенек, а в записях их 21`);
+}
+
 console.log(failed ? `\nПРОВАЛОВ: ${failed}` : '\nOK');
 process.exit(failed ? 1 : 0);
