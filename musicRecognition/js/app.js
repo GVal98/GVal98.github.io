@@ -537,8 +537,14 @@ function closeEntry(entry, at = Date.now()) {
 //
 // В калибровке наоборот. Там человек ждёт ответа на каждое движение, и
 // молчание неотличимо от «датчик не работает»: он повторяет одно и то же, не
-// зная, что именно не так. Поэтому там есть и третий ответ — «не в счёт».
+// зная, что именно не так. Поэтому там есть и третий ответ — «не в счёт», и
+// четвёртый — «улёгся»: укладка в карман и усаживание тоже движения, и без
+// ответа на них не знать, когда уже можно поднимать ногу.
 const POSE_BUZZ = {
+  // Калибровка: возня кончилась, телефон улёгся — можно поднимать ногу.
+  // Одна длинная против одной короткой у «принято»: сигналы соседние по
+  // времени, и различаться им лучше длиной, чем счётом.
+  ready: [400],
   step: [120],            // калибровка: движение принято, давай следующее
   done: [400, 150, 400],  // калибровка: ось снята
   // Калибровка: движение разобрано и отброшено. Короче и чаще всего
@@ -663,8 +669,8 @@ async function startCalibration() {
   setPoseCalStep(1);
   $('calibratePoseBtn').textContent = 'Cancelar';
   setPoseCal('Ahora guarde el teléfono donde vaya a estar y siéntese como en el concurso; tómese '
-    + 'el tiempo que necesite. Ya sentado: quieto un segundo, suba la pierna, quieto otro segundo. '
-    + 'El aviso tarda segundo y medio en llegar.');
+    + 'el tiempo que necesite. Una vibración larga avisa de que el teléfono ya reposa: desde ahí, '
+    + 'quieto un segundo, suba la pierna, quieto otro segundo. El aviso tarda segundo y medio en llegar.');
   log('', 'calibración de la pierna: esperando el primer movimiento');
 }
 
@@ -700,11 +706,16 @@ function onPoseStep(e) {
   // выносит уже после калибровочной ветки.
   if (poseGate?.calibrating) {
     armCalTimeout();
-    // Первое длинное движение после нажатия — это укладка в карман: её только
-    // что и велели сделать. Ругаться на исполненное указание нельзя, а мотор
-    // тут вдобавок стучал бы человеку в руку, пока телефон ещё в ней. Отказом
-    // это станет позже: к тому времени карман уже позади.
+    // Длинное движение до первого шага — это не нога, а обустройство: укладка
+    // в карман, усаживание, поправленный карман. Всё это только что и велели
+    // сделать, и ругаться на исполненное указание нельзя. Вместо отказа —
+    // «улёгся, поднимайте»: вердикт выносится через полсекунды после того, как
+    // движение кончилось, телефон к этому моменту уже лежит в кармане, и
+    // стучит мотор в ногу, а не в руку. Новая возня повторяет сигнал: ждут
+    // по-прежнему поднятия. Отказом long станет позже, после первого шага:
+    // там уже просили опустить ногу, а не устроиться.
     if (e.verdict === 'long' && !poseGate.calSteps) {
+      poseBuzz(POSE_BUZZ.ready);
       setPoseCal('Teléfono guardado. Ahora quédese quieto un segundo y suba la pierna.');
       log('', `calibración: teléfono guardado (${e.moveSec.toFixed(1)} s)`);
       return;
